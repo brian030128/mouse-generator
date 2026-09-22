@@ -7,8 +7,8 @@ need installing. Data stays in a local SQLite database.
 
 Requires Windows and Python 3.10+ with Tk (included in the normal Windows installer).
 
-**Double-click `Start Recorder.bat`** to open the recorder and automatically start
-the three-second countdown. Press **F8** anywhere to stop. You can also create a
+**Double-click `Start Recorder.bat`** to open the recorder and immediately start
+recording. Press **F8** anywhere to stop. You can also create a
 desktop shortcut to this launcher. It uses Python's windowed interpreter so no
 terminal stays open.
 
@@ -22,34 +22,43 @@ python recorder.py
 ```
 
 1. Optionally enter a session label.
-2. Click **Start**. A three-second countdown lets you return to your task.
+2. Click **Start** to begin recording immediately.
 3. Use the mouse normally. Press **F8** anywhere to stop.
 4. Use **Export CSV** to export all accepted segments from all sessions.
 
-## Five-second filtering
+## Segment filtering
 
 - The first cursor movement after recording starts, or after a left-click,
   starts a segment. The next **left-button press** ends it.
-- Segments lasting **at most 5 seconds** are saved; longer segments are discarded
-  entirely, including their clicks. After that click, the recorder waits for
-  fresh cursor movement before starting another candidate.
-- The unfinished segment at Stop is discarded. An interval with no movement
-  still counts as elapsed time, so long pauses are rejected too.
+- Segments lasting **at most 8 seconds** are saved in full.
+- For longer segments, only events in the **last 1.5 seconds before the click**
+  are retained, starting at the first movement in that window. This uses a fixed
+  1.5-second window (the upper end of 0.8–1.5 seconds), without random trimming.
+  If the window contains no movement, the segment is discarded. Sparse events
+  can produce a saved segment shorter than 1.5 seconds; no points are fabricated.
+- The unfinished segment at Stop is discarded. After a click, the recorder waits
+  for fresh cursor movement before starting another candidate.
 - Clicks without preceding movement do not create segments. Right/middle/side
   clicks and scrolling are recorded inside segments but do not end them.
 - Prefer **F8** to the Stop button: clicking the recorder's controls can otherwise
   produce an ordinary segment ending at that click.
 
 Movement onset means the first delivered mouse-move event, with no minimum
-distance threshold. Pauses after onset count toward the five-second limit;
-they do not reset it. Once a segment exceeds the limit, the recorder waits
-for the next left-click before allowing a fresh segment. Drags can occur
-within a segment. An incomplete segment at Stop is never saved.
+distance threshold. Pauses after onset count toward the eight-second threshold;
+they do not reset it. Long segments retain a rolling 1.5-second buffer until the
+next left-click. Drags can occur within a segment. An incomplete segment at Stop
+is never saved. Existing saved recordings are not modified by this rule.
 
 ## Database
 
 Default location: `data/mouse.sqlite3` beside the program. Each accepted segment
 is committed immediately; an interrupted session can have a NULL `ended_utc`.
+Every launch appends a new session to the same database, preserving earlier data.
+You can open the launcher each time you turn on your PC; no manual save is needed.
+The launcher does not register itself to run at Windows startup.
+The window shows the current session's saved/discarded counts and **Total saved
+segments (all sessions)**, which includes previous runs and updates after each save.
+A record in this total means one accepted movement-to-click segment, not one event.
 
 | Table | Contents |
 | --- | --- |

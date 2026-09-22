@@ -28,19 +28,27 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(self.saved, [])
         self.assertEqual(self.collector.discarded, 1)
 
-    def test_exactly_five_seconds_is_kept(self):
-        for item in [event(1), event(2), click(6)]:
+    def test_exactly_eight_seconds_is_kept(self):
+        for item in [event(1), event(2), click(9)]:
             self.collector.feed(item)
         self.assertEqual(len(self.saved), 1)
         self.assertEqual(len(self.saved[0]), 3)
 
-    def test_over_five_seconds_dropped_and_next_interval_recovers(self):
-        for item in [event(0), event(5.000000001), click(6), event(7), click(8)]:
+    def test_long_segment_keeps_tail_and_next_interval_recovers(self):
+        for item in [event(0), event(8), event(8.5), event(9), click(10), event(11), click(12)]:
             self.collector.feed(item)
-        self.assertEqual(self.collector.discarded, 1)
-        self.assertEqual(len(self.saved), 1)
-        self.assertEqual(self.saved[0][0], event(7))
-        self.assertEqual(self.saved[0][-1], click(8))
+        self.assertEqual(self.collector.discarded, 0)
+        self.assertEqual(self.saved, [[event(8.5), event(9), click(10)], [event(11), click(12)]])
+
+    def test_just_over_eight_seconds_trims(self):
+        for item in [event(0), event(6), event(7), click(8.000000001)]:
+            self.collector.feed(item)
+        self.assertEqual(self.saved, [[event(7), click(8.000000001)]])
+
+    def test_tail_starts_at_movement_not_button(self):
+        for item in [event(0), event(8.5, "up", "left"), event(9), click(10)]:
+            self.collector.feed(item)
+        self.assertEqual(self.saved, [[event(9), click(10)]])
 
     def test_long_idle_without_moves_is_dropped(self):
         self.collector.feed(event(0))
@@ -54,11 +62,11 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual([len(items) for items in self.saved], [3, 2])
         self.assertEqual(self.saved[1][0], event(2.5))
 
-    def test_expired_buffer_is_released(self):
+    def test_long_buffer_only_keeps_recent_events(self):
         self.collector.feed(event(0))
         for second in range(1, 100):
             self.collector.feed(event(second))
-        self.assertEqual(self.collector.events, [])
+        self.assertEqual(list(self.collector.events), [event(98), event(99)])
 
     def test_initial_movement_saved_and_click_does_not_start_next_segment(self):
         for item in [event(0), click(1), click(1.1), event(2), click(3)]:
@@ -73,14 +81,16 @@ class StorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "dataset.sqlite3"
             database = Database(path)
-            session = database.start_session("test", 5_000_000_000, (-1920, 0, 3840, 1080))
+            self.assertEqual(database.count_segments(), 0)
+            session = database.start_session("test", 8_000_000_000, (-1920, 0, 3840, 1080))
             collector = SegmentCollector(lambda items: database.save_segment(session, 0, items))
-            for item in [click(0), event(1), event(2), click(3), event(3.5), click(9)]:
+            for item in [click(0), event(1), event(2), click(3), event(3.5), click(12)]:
                 collector.feed(item)
             collector.finish()
             database.finish_session(session)
             database.close()
             database = Database(path)
+            self.assertEqual(database.count_segments(), 1)
             with self.assertRaises(ValueError):
                 database.export_csv(path)
             self.assertEqual(database.connection.execute(

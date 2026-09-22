@@ -68,6 +68,9 @@ class Database:
                 (utc_now(), session_id),
             )
 
+    def count_segments(self):
+        return self.connection.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+
     def save_segment(self, session_id, recording_start_ns, events):
         start = events[0].timestamp_ns
         duration = events[-1].timestamp_ns - start

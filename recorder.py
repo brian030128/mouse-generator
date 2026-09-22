@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from capture import MouseCapture, configure_desktop, stop_key_pressed
-from segments import SegmentCollector
+from segments import MAX_DURATION_NS, SegmentCollector
 from storage import Database
 
 
@@ -21,10 +21,9 @@ class RecorderApp:
         self.capture = None
         self.collector = None
         self.session_id = None
-        self.countdown_id = None
         root.title("Mouse dataset recorder")
-        root.geometry("640x330")
-        root.minsize(580, 330)
+        root.geometry("680x360")
+        root.minsize(680, 360)
         root.protocol("WM_DELETE_WINDOW", self.close)
         panel = ttk.Frame(root, padding=20)
         panel.pack(fill="both", expand=True)
@@ -36,12 +35,12 @@ class RecorderApp:
         self.label = ttk.Entry(row)
         self.label.pack(side="left", fill="x", expand=True, padx=(10, 0))
         ttk.Label(panel, text="First cursor movement starts a segment; the next left-click ends it.\n"
-                  "Intervals over 5 seconds and unfinished intervals are discarded.").pack(anchor="w", pady=12)
+                  "Over 8 seconds: keep the last 1.5 seconds. Unfinished intervals are discarded.").pack(anchor="w", pady=12)
         controls = ttk.Frame(panel)
         controls.pack(fill="x")
-        self.start_button = ttk.Button(controls, text="Start (3-second countdown)", command=self.countdown)
+        self.start_button = ttk.Button(controls, text="Start", command=self.begin)
         self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(controls, text="Stop / Cancel (F8)", command=self.stop, state="disabled")
+        self.stop_button = ttk.Button(controls, text="Stop (F8)", command=self.stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
         self.export_button = ttk.Button(controls, text="Export CSV", command=self.export)
         self.export_button.pack(side="left")
@@ -49,27 +48,26 @@ class RecorderApp:
         ttk.Label(panel, textvariable=self.status).pack(anchor="w", pady=(16, 5))
         self.counts = tk.StringVar(value="Saved: 0    Discarded: 0")
         ttk.Label(panel, textvariable=self.counts).pack(anchor="w")
+        self.total_segments = self.database.count_segments()
+        self.total = tk.StringVar(value=f"Total saved segments (all sessions): {self.total_segments:,}")
+        ttk.Label(panel, textvariable=self.total).pack(anchor="w", pady=(5, 0))
         ttk.Label(panel, text=f"Database: {path}", wraplength=590).pack(anchor="w", pady=(12, 0))
         root.after(20, self.tick)
 
-    def countdown(self, remaining=3):
-        self.countdown_id = None
-        if remaining == 3:
-            self.start_button.configure(state="disabled")
-            self.export_button.configure(state="disabled")
-            self.stop_button.configure(state="normal")
-        if remaining:
-            self.status.set(f"Recording starts in {remaining}…")
-            self.countdown_id = self.root.after(1000, self.countdown, remaining - 1)
-        else:
-            self.begin()
-
     def begin(self):
+        if self.capture is not None:
+            return
+        self.start_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         try:
+            self.total_segments = self.database.count_segments()
+            self.update_total()
             self.recording_start_ns = time.perf_counter_ns()
             self.session_id = self.database.start_session(
-                self.label.get().strip(), 5_000_000_000, self.screen)
+                self.label.get().strip(), MAX_DURATION_NS, self.screen)
             self.collector = SegmentCollector(self.save)
+            self.update_counts()
             self.capture = MouseCapture()
             self.capture.start()
             self.status.set("Recording — press F8 anywhere to stop")
@@ -79,6 +77,11 @@ class RecorderApp:
 
     def save(self, events):
         self.database.save_segment(self.session_id, self.recording_start_ns, events)
+        self.total_segments += 1
+        self.update_total()
+
+    def update_total(self):
+        self.total.set(f"Total saved segments (all sessions): {self.total_segments:,}")
 
     def drain(self, before_ns=None, limit=None):
         processed = 0
@@ -93,7 +96,7 @@ class RecorderApp:
 
     def tick(self):
         try:
-            if (self.capture or self.countdown_id) and stop_key_pressed():
+            if self.capture and stop_key_pressed():
                 self.stop()
             if self.capture:
                 if self.capture.error or not self.capture.thread.is_alive():
@@ -113,9 +116,6 @@ class RecorderApp:
     def stop(self, flush=True):
         cutoff_ns = time.perf_counter_ns()
         errors = []
-        if self.countdown_id:
-            self.root.after_cancel(self.countdown_id)
-            self.countdown_id = None
         if self.capture:
             try:
                 self.capture.stop()
@@ -163,7 +163,7 @@ def main():
     parser.add_argument("--db", type=Path,
                         default=Path(__file__).resolve().parent / "data" / "mouse.sqlite3")
     parser.add_argument("--export", type=Path, metavar="CSV", help="Export the database and exit")
-    parser.add_argument("--start", action="store_true", help="Begin the recording countdown on launch")
+    parser.add_argument("--start", action="store_true", help="Start recording immediately on launch")
     args = parser.parse_args()
     if args.export:
         if args.export.resolve() == args.db.resolve():
@@ -181,7 +181,7 @@ def main():
     root = tk.Tk()
     app = RecorderApp(root, database, args.db.resolve(), screen)
     if args.start:
-        root.after(100, app.countdown)
+        app.begin()
     root.mainloop()
 
 
