@@ -1,4 +1,4 @@
-# Mouse dataset recorder
+# Recorder
 
 A Windows desktop mouse recorder using Python's standard library. No packages
 need installing. Data stays in a local SQLite database.
@@ -15,16 +15,30 @@ terminal stays open.
 Recording continues while the window is minimized or another app is in front.
 Keep the recorder running; closing its window stops recording.
 
-To open the interface without starting recording, run:
+You can also open the recorder from PowerShell; recording starts immediately:
 
 ```powershell
 python recorder.py
 ```
 
-1. Optionally enter a session label.
-2. Click **Start** to begin recording immediately.
-3. Use the mouse normally. Press **F8** anywhere to stop.
-4. Use **Export CSV** to export all accepted segments from all sessions.
+No Start, Stop, or Export buttons are needed. Data saves automatically.
+Close the window to stop, or press **F8** anywhere. If you use F8, close and reopen
+the app when you want to record again. CSV export remains available from the
+command line below.
+
+## Start with Windows
+
+Turn on **Start recording when I sign in to Windows** to launch the visible
+recorder window and begin recording at your next Windows sign-in. Turn it off
+to remove this app's startup registration. The setting persists across restarts
+and is off by default. Changing it does not start or stop the current recording.
+
+This uses the current user's standard Windows `Run` registry key (entry
+`MouseDatasetRecorder`), requires no administrator access, and records only after
+you sign in, not before login. The registration uses absolute paths to Python,
+the script, and your database. If you move the app or change Python installations,
+turn the toggle off and on from the new location. Windows startup policies or
+disabling the entry in Windows settings can prevent automatic startup.
 
 ## Segment filtering
 
@@ -40,8 +54,8 @@ python recorder.py
   for fresh cursor movement before starting another candidate.
 - Clicks without preceding movement do not create segments. Right/middle/side
   clicks and scrolling are recorded inside segments but do not end them.
-- Prefer **F8** to the Stop button: clicking the recorder's controls can otherwise
-  produce an ordinary segment ending at that click.
+- Clicking the recorder window can produce an ordinary segment ending at that
+  click, just like clicking another app.
 
 Movement onset means the first delivered mouse-move event, with no minimum
 distance threshold. Pauses after onset count toward the eight-second threshold;
@@ -55,10 +69,13 @@ Default location: `data/mouse.sqlite3` beside the program. Each accepted segment
 is committed immediately; an interrupted session can have a NULL `ended_utc`.
 Every launch appends a new session to the same database, preserving earlier data.
 You can open the launcher each time you turn on your PC; no manual save is needed.
-The launcher does not register itself to run at Windows startup.
-The window shows the current session's saved/discarded counts and **Total saved
-segments (all sessions)**, which includes previous runs and updates after each save.
+Startup registration is controlled only by the Windows sign-in toggle.
+The window shows the current run's saved/discarded counts and **Total saved
+segments**, which includes previous runs and updates after each save.
 A record in this total means one accepted movement-to-click segment, not one event.
+There is no session-label input. Internal session IDs and existing labels remain
+in SQLite for compatibility and to associate timing and display metadata; new
+labels are empty. Existing recordings are preserved.
 
 | Table | Contents |
 | --- | --- |

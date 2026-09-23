@@ -6,7 +6,7 @@ import queue
 import sys
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 from capture import MouseCapture, configure_desktop, stop_key_pressed
 from segments import MAX_DURATION_NS, SegmentCollector
@@ -14,58 +14,65 @@ from storage import Database
 
 
 class RecorderApp:
-    def __init__(self, root, database, path, screen):
+    def __init__(self, root, database, path, screen, startup=None):
         self.root = root
         self.database = database
         self.screen = screen
         self.capture = None
         self.collector = None
         self.session_id = None
-        root.title("Mouse dataset recorder")
-        root.geometry("680x360")
-        root.minsize(680, 360)
+        if startup is None:
+            from startup import StartupRegistration
+            startup = StartupRegistration(__file__, path)
+        self.startup = startup
+        root.title("Recorder")
+        root.geometry("680x320")
+        root.minsize(680, 320)
         root.protocol("WM_DELETE_WINDOW", self.close)
         panel = ttk.Frame(root, padding=20)
         panel.pack(fill="both", expand=True)
-        ttk.Label(panel, text="Mouse dataset recorder", font=("Segoe UI", 17)).pack(anchor="w")
-        ttk.Label(panel, text="Records desktop mouse events locally while enabled.").pack(anchor="w", pady=(5, 12))
-        row = ttk.Frame(panel)
-        row.pack(fill="x")
-        ttk.Label(row, text="Session label:").pack(side="left")
-        self.label = ttk.Entry(row)
-        self.label.pack(side="left", fill="x", expand=True, padx=(10, 0))
+        ttk.Label(panel, text="Recorder", font=("Segoe UI", 17)).pack(anchor="w")
+        ttk.Label(panel, text="Recording starts automatically. Close the window to stop.").pack(anchor="w", pady=(5, 12))
         ttk.Label(panel, text="First cursor movement starts a segment; the next left-click ends it.\n"
                   "Over 8 seconds: keep the last 1.5 seconds. Unfinished intervals are discarded.").pack(anchor="w", pady=12)
-        controls = ttk.Frame(panel)
-        controls.pack(fill="x")
-        self.start_button = ttk.Button(controls, text="Start", command=self.begin)
-        self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(controls, text="Stop (F8)", command=self.stop, state="disabled")
-        self.stop_button.pack(side="left", padx=8)
-        self.export_button = ttk.Button(controls, text="Export CSV", command=self.export)
-        self.export_button.pack(side="left")
+        self.autostart = tk.BooleanVar(value=False)
+        self.autostart_button = ttk.Checkbutton(
+            panel, text="Start recording when I sign in to Windows",
+            variable=self.autostart, command=self.toggle_autostart)
+        self.autostart_button.pack(anchor="w", pady=(12, 0))
+        try:
+            self.autostart.set(self.startup.is_enabled())
+        except OSError as error:
+            self.autostart_button.configure(state="disabled")
+            messagebox.showerror("Cannot read Windows startup setting", str(error))
         self.status = tk.StringVar(value="Idle — recording is off")
         ttk.Label(panel, textvariable=self.status).pack(anchor="w", pady=(16, 5))
         self.counts = tk.StringVar(value="Saved: 0    Discarded: 0")
         ttk.Label(panel, textvariable=self.counts).pack(anchor="w")
         self.total_segments = self.database.count_segments()
-        self.total = tk.StringVar(value=f"Total saved segments (all sessions): {self.total_segments:,}")
+        self.total = tk.StringVar(value=f"Total saved segments: {self.total_segments:,}")
         ttk.Label(panel, textvariable=self.total).pack(anchor="w", pady=(5, 0))
         ttk.Label(panel, text=f"Database: {path}", wraplength=590).pack(anchor="w", pady=(12, 0))
-        root.after(20, self.tick)
+        self.tick_id = root.after(20, self.tick)
+
+    def toggle_autostart(self):
+        requested = self.autostart.get()
+        try:
+            self.startup.set_enabled(requested)
+            self.autostart.set(self.startup.is_enabled())
+        except OSError as error:
+            self.autostart.set(not requested)
+            messagebox.showerror("Cannot change Windows startup setting", str(error))
 
     def begin(self):
         if self.capture is not None:
             return
-        self.start_button.configure(state="disabled")
-        self.export_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
         try:
             self.total_segments = self.database.count_segments()
             self.update_total()
             self.recording_start_ns = time.perf_counter_ns()
             self.session_id = self.database.start_session(
-                self.label.get().strip(), MAX_DURATION_NS, self.screen)
+                "", MAX_DURATION_NS, self.screen)
             self.collector = SegmentCollector(self.save)
             self.update_counts()
             self.capture = MouseCapture()
@@ -81,7 +88,7 @@ class RecorderApp:
         self.update_total()
 
     def update_total(self):
-        self.total.set(f"Total saved segments (all sessions): {self.total_segments:,}")
+        self.total.set(f"Total saved segments: {self.total_segments:,}")
 
     def drain(self, before_ns=None, limit=None):
         processed = 0
@@ -107,7 +114,7 @@ class RecorderApp:
             self.stop(flush=False)
             messagebox.showerror("Recording stopped", str(error))
         finally:
-            self.root.after(20, self.tick)
+            self.tick_id = self.root.after(20, self.tick)
 
     def update_counts(self):
         if self.collector:
@@ -134,25 +141,12 @@ class RecorderApp:
             except Exception as error:
                 errors.append(str(error))
             self.session_id = None
-        self.status.set("Stopped — recording is off")
-        self.start_button.configure(state="normal")
-        self.export_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
+        self.status.set("Stopped — reopen Recorder to record again")
         if errors:
             messagebox.showerror("Recording error", "\n".join(errors))
 
-    def export(self):
-        filename = filedialog.asksaveasfilename(
-            defaultextension=".csv", filetypes=[("CSV dataset", "*.csv")],
-            initialfile="mouse_dataset.csv")
-        if filename:
-            try:
-                self.database.export_csv(filename)
-                self.status.set("Dataset exported")
-            except Exception as error:
-                messagebox.showerror("Export failed", str(error))
-
     def close(self):
+        self.root.after_cancel(self.tick_id)
         self.stop()
         self.database.close()
         self.root.destroy()
@@ -163,7 +157,8 @@ def main():
     parser.add_argument("--db", type=Path,
                         default=Path(__file__).resolve().parent / "data" / "mouse.sqlite3")
     parser.add_argument("--export", type=Path, metavar="CSV", help="Export the database and exit")
-    parser.add_argument("--start", action="store_true", help="Start recording immediately on launch")
+    # Accept the old launcher/startup flag; recording now starts on every GUI launch.
+    parser.add_argument("--start", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.export:
         if args.export.resolve() == args.db.resolve():
@@ -180,8 +175,7 @@ def main():
     database = Database(args.db)
     root = tk.Tk()
     app = RecorderApp(root, database, args.db.resolve(), screen)
-    if args.start:
-        app.begin()
+    app.begin()
     root.mainloop()
 
 
