@@ -9,8 +9,9 @@ Requires Windows or macOS and Python 3.10+ with Tk (included in the normal
 python.org installers; with Homebrew Python also run `brew install python-tk`).
 
 On Windows, **double-click `Start Recorder.bat`**; on macOS, **double-click
-`Start Recorder.command`**. Either one opens the recorder and immediately start
-recording. Press **F8** anywhere to stop. You can also create a
+`Start Recorder.command`**. Either one opens the recorder and immediately starts
+recording. On Windows, press **F8** anywhere to stop; on macOS, close the window
+(no keyboard is used). You can also create a
 desktop shortcut (Windows) or Dock alias (macOS) to the launcher. Neither
 leaves a terminal window open.
 
@@ -24,18 +25,16 @@ python recorder.py
 ```
 
 No Start, Stop, or Export buttons are needed. Data saves automatically.
-Close the window to stop, or press **F8** anywhere. If you use F8, close and reopen
-the app when you want to record again. CSV export remains available from the
+Close the window to stop, or on Windows press **F8** anywhere. If you use F8, close
+and reopen the app when you want to record again. CSV export remains available from the
 command line below.
 
 ## macOS permissions
 
-macOS may ask to allow **Input Monitoring** for the app that launched the
-recorder (Terminal, or Python itself when started at sign-in). Allow it under
-System Settings > Privacy & Security > Input Monitoring, then reopen the
-recorder. Without it, F8 does not stop recording (closing the window still
-works), and on some macOS versions no mouse events arrive. On Apple keyboards
-F8 is a media key by default; press **fn+F8**.
+The recorder does not ask for keyboard access on macOS. If macOS refuses mouse
+capture, the recorder shows an error. Then allow the app that launched it
+(Terminal, or Python itself when started at sign-in) under System Settings >
+Privacy & Security > Input Monitoring, and reopen the recorder.
 
 ## Start at sign-in
 
@@ -47,7 +46,16 @@ and is off by default. Changing it does not start or stop the current recording.
 On Windows this uses the current user's standard `Run` registry key (entry
 `MouseDatasetRecorder`). On macOS it writes the per-user LaunchAgent
 `~/Library/LaunchAgents/com.mousedatasetrecorder.recorder.plist`. Neither needs
-administrator access, and both record only after you sign in, not before login. The registration uses absolute paths to Python,
+administrator access, and both record only after you sign in, not before login.
+
+If turning the setting on in macOS shows **Permission denied**, another installer
+has left `~/Library/LaunchAgents` owned by the system. The error dialog shows the
+fix and copies it to the clipboard. Run it in Terminal, enter your Mac password,
+then turn the setting on again:
+
+```bash
+sudo chown "$USER" ~/Library/LaunchAgents
+``` The registration uses absolute paths to Python,
 the script, and your database. If you move the app or change Python installations,
 turn the toggle off and on from the new location. Startup policies, or disabling the entry in
 Windows settings or macOS Login Items, can prevent automatic startup.
@@ -115,8 +123,8 @@ the OS delivers them, not at a fixed sampling rate; stationary time is represent
 by gaps between timestamps. OS-flagged injected mouse events are ignored (on macOS, events not originating
 from the HID system).
 
-The recorder uses a mouse hook (Windows) or listen-only event tap (macOS) while recording and checks only F8 as a stop
-control. It does not record typed text, window titles, page content or screenshots.
+The recorder uses a mouse hook (Windows) or listen-only event tap (macOS) while recording. On Windows it checks only F8 as a stop
+control; on macOS it reads no keyboard state at all. It does not record typed text, window titles, page content or screenshots.
 It does not upload data. Capture applies to the normal interactive desktop;
 Windows secure desktop events are not captured. Keep monitor layout and scaling
 unchanged during a run; restart the app after changing them.

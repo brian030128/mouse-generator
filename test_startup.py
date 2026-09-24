@@ -89,6 +89,18 @@ class MacStartupTests(unittest.TestCase):
         self.assertEqual(unrelated.read_bytes(), b"keep")
         reopened.set_enabled(False)
 
+    def test_unwritable_folder_explains_fix(self):
+        self.agents.mkdir()
+        self.agents.chmod(0o555)
+        try:
+            with self.assertRaises(PermissionError) as caught:
+                self.registration.set_enabled(True)
+        finally:
+            self.agents.chmod(0o755)
+        self.assertEqual(caught.exception.fix_command, f'sudo chown "$USER" "{self.agents}"')
+        self.assertIn(caught.exception.fix_command, str(caught.exception))
+        self.assertFalse(self.registration.is_enabled())
+
     def test_changed_location_requires_registration_update(self):
         self.registration.set_enabled(True)
         moved = MacStartupRegistration(self.script.with_name("moved.py"),

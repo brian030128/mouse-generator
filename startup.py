@@ -51,6 +51,14 @@ class WindowsStartupRegistration:
 LAUNCH_AGENT_LABEL = "com.mousedatasetrecorder.recorder"
 
 
+class StartupPermissionError(PermissionError):
+    """Startup folder not writable; `fix_command` is a Terminal command that fixes it."""
+
+    def __init__(self, message, fix_command):
+        super().__init__(message)
+        self.fix_command = fix_command
+
+
 class MacStartupRegistration:
     def __init__(self, script, database, *, directory=None, label=LAUNCH_AGENT_LABEL):
         directory = Path(directory or Path.home() / "Library" / "LaunchAgents")
@@ -95,10 +103,15 @@ class MacStartupRegistration:
     def _permission_error(self, error):
         # Some installers leave ~/Library/LaunchAgents owned by root.
         folder = self.path.parent
-        return PermissionError(
-            f"{error}\n\nmacOS does not let this account write to {folder}. "
-            f"To fix it, run this in Terminal, enter your password, then try again:\n\n"
-            f'sudo chown "$USER" "{folder}"')
+        shown = ("~/Library/LaunchAgents" if folder == Path.home() / "Library" / "LaunchAgents"
+                 else f'"{folder}"')
+        command = f'sudo chown "$USER" {shown}'
+        return StartupPermissionError(
+            f"macOS does not let this account write to {shown}, so the recorder "
+            f"cannot register itself to start at sign-in. This happens when another "
+            f"installer left that folder owned by the system.\n\n"
+            f"To fix it, run this in Terminal, enter your Mac password, then turn "
+            f"the setting on again:\n\n{command}", command)
 
 
 StartupRegistration = (MacStartupRegistration if sys.platform == "darwin"

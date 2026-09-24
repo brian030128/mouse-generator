@@ -16,7 +16,8 @@ from storage import Database
 MACOS = sys.platform == "darwin"
 SYSTEM_NAME = "macOS" if MACOS else "Windows"
 TITLE_FONT = ("Helvetica Neue", 20) if MACOS else ("Segoe UI", 17)
-STOP_KEY = "F8 (fn+F8 on Mac keyboards)" if MACOS else "F8"
+STOPPING = ("Recording — close the window to stop" if stop_key_pressed is None
+            else "Recording — press F8 anywhere to stop")
 
 
 class RecorderApp:
@@ -68,7 +69,14 @@ class RecorderApp:
             self.autostart.set(self.startup.is_enabled())
         except OSError as error:
             self.autostart.set(not requested)
-            messagebox.showerror(f"Cannot change {SYSTEM_NAME} startup setting", str(error))
+            message = str(error)
+            fix_command = getattr(error, "fix_command", None)
+            if fix_command:
+                # Dialog text cannot be selected on macOS, so offer the command to paste.
+                self.root.clipboard_clear()
+                self.root.clipboard_append(fix_command)
+                message += "\n\nThis command has been copied to the clipboard."
+            messagebox.showerror(f"Cannot change {SYSTEM_NAME} startup setting", message)
 
     def begin(self):
         if self.capture is not None:
@@ -83,7 +91,7 @@ class RecorderApp:
             self.update_counts()
             self.capture = MouseCapture()
             self.capture.start()
-            self.status.set(f"Recording — press {STOP_KEY} anywhere to stop")
+            self.status.set(STOPPING)
         except Exception as error:
             self.stop()
             messagebox.showerror("Cannot start recording", str(error))
@@ -111,7 +119,7 @@ class RecorderApp:
 
     def tick(self):
         try:
-            if self.capture and stop_key_pressed():
+            if self.capture and stop_key_pressed and stop_key_pressed():
                 self.stop()
             if self.capture:
                 if self.capture.error or not self.capture.thread.is_alive():

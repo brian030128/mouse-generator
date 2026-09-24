@@ -53,9 +53,6 @@ def _libraries():
         quartz.CGDisplayModeGetPixelWidth.argtypes = [ctypes.c_void_p]
         quartz.CGDisplayModeGetPixelWidth.restype = ctypes.c_size_t
         quartz.CGDisplayModeRelease.argtypes = [ctypes.c_void_p]
-        quartz.CGEventSourceKeyState.argtypes = [ctypes.c_int32, ctypes.c_uint16]
-        quartz.CGEventSourceKeyState.restype = ctypes.c_bool
-        quartz.CGRequestListenEventAccess.restype = ctypes.c_bool
         cf.CFMachPortCreateRunLoopSource.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
         cf.CFMachPortCreateRunLoopSource.restype = ctypes.c_void_p
         cf.CFMachPortInvalidate.argtypes = [ctypes.c_void_p]
@@ -169,8 +166,6 @@ class MouseCapture:
 
 def configure_desktop():
     quartz, _ = _libraries()
-    # F8 polling needs Input Monitoring; this prompts once and is a no-op afterwards.
-    quartz.CGRequestListenEventAccess()
     ids = (ctypes.c_uint32 * 32)()
     count = ctypes.c_uint32()
     if quartz.CGGetActiveDisplayList(32, ids, ctypes.byref(count)) or not count.value:
@@ -200,9 +195,3 @@ def pixel_scale_at(x, y):
         quartz.CGDisplayModeRelease(mode)
     points = quartz.CGDisplayBounds(display.value).width
     return pixels / points if points else None
-
-
-def stop_key_pressed():
-    # Only this fixed control key is checked; no typed text is collected.
-    # Keycode 100 is F8; on Apple keyboards this may need fn+F8.
-    return bool(_libraries()[0].CGEventSourceKeyState(HID_SYSTEM_STATE, 100))
