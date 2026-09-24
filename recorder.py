@@ -8,16 +8,13 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from capture import (SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at,
-                     stop_key_pressed)
+from capture import SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at
 from segments import MAX_DURATION_NS, SegmentCollector
 from storage import Database
 
 MACOS = sys.platform == "darwin"
 SYSTEM_NAME = "macOS" if MACOS else "Windows"
 TITLE_FONT = ("Helvetica Neue", 20) if MACOS else ("Segoe UI", 17)
-STOPPING = ("Recording — close the window to stop" if stop_key_pressed is None
-            else "Recording — press F8 anywhere to stop")
 
 
 class RecorderApp:
@@ -91,7 +88,7 @@ class RecorderApp:
             self.update_counts()
             self.capture = MouseCapture()
             self.capture.start()
-            self.status.set(STOPPING)
+            self.status.set("Recording — close the window to stop")
         except Exception as error:
             self.stop()
             messagebox.showerror("Cannot start recording", str(error))
@@ -119,8 +116,6 @@ class RecorderApp:
 
     def tick(self):
         try:
-            if self.capture and stop_key_pressed and stop_key_pressed():
-                self.stop()
             if self.capture:
                 if self.capture.error or not self.capture.thread.is_alive():
                     raise RuntimeError(self.capture.error or "Mouse capture stopped unexpectedly.")

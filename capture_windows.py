@@ -128,11 +128,3 @@ def configure_desktop():
 def pixel_scale_at(x, y):
     # Per-monitor DPI awareness already reports physical pixels.
     return 1.0
-
-
-def stop_key_pressed():
-    # Only this fixed control key is checked; no typed text is collected.
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
-    user32.GetAsyncKeyState.restype = ctypes.c_short
-    return bool(user32.GetAsyncKeyState(0x77) & 0x8000)

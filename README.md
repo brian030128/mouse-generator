@@ -10,8 +10,7 @@ python.org installers; with Homebrew Python also run `brew install python-tk`).
 
 On Windows, **double-click `Start Recorder.bat`**; on macOS, **double-click
 `Start Recorder.command`**. Either one opens the recorder and immediately starts
-recording. On Windows, press **F8** anywhere to stop; on macOS, close the window
-(no keyboard is used). You can also create a
+recording. Close the window to stop; no keyboard is used. You can also create a
 desktop shortcut (Windows) or Dock alias (macOS) to the launcher. Neither
 leaves a terminal window open.
 
@@ -25,9 +24,8 @@ python recorder.py
 ```
 
 No Start, Stop, or Export buttons are needed. Data saves automatically.
-Close the window to stop, or on Windows press **F8** anywhere. If you use F8, close
-and reopen the app when you want to record again. CSV export remains available from the
-command line below.
+Close the window to stop; reopen the app to record again. CSV export remains
+available from the command line below.
 
 ## macOS permissions
 
@@ -123,8 +121,8 @@ the OS delivers them, not at a fixed sampling rate; stationary time is represent
 by gaps between timestamps. OS-flagged injected mouse events are ignored (on macOS, events not originating
 from the HID system).
 
-The recorder uses a mouse hook (Windows) or listen-only event tap (macOS) while recording. On Windows it checks only F8 as a stop
-control; on macOS it reads no keyboard state at all. It does not record typed text, window titles, page content or screenshots.
+The recorder uses a mouse hook (Windows) or listen-only event tap (macOS) while
+recording and reads no keyboard state at all. It does not record typed text, window titles, page content or screenshots.
 It does not upload data. Capture applies to the normal interactive desktop;
 Windows secure desktop events are not captured. Keep monitor layout and scaling
 unchanged during a run; restart the app after changing them.
