@@ -50,14 +50,23 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS segments_session ON segments(session_id);
         """)
+        # Columns added after the first release; rows recorded earlier stay NULL.
+        self._add_column("sessions", "platform", "TEXT")
+        self._add_column("segments", "pixel_scale", "REAL")
 
-    def start_session(self, label, max_duration_ns, screen):
+    def _add_column(self, table, column, kind):
+        columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            with self.connection:
+                self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+
+    def start_session(self, label, max_duration_ns, screen, platform=None):
         with self.connection:
             result = self.connection.execute(
                 "INSERT INTO sessions(started_utc, label, max_duration_ns, "
-                "screen_left, screen_top, screen_width, screen_height) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (utc_now(), label, max_duration_ns, *screen),
+                "screen_left, screen_top, screen_width, screen_height, platform) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (utc_now(), label, max_duration_ns, *screen, platform),
             )
         return result.lastrowid
 
@@ -71,14 +80,14 @@ class Database:
     def count_segments(self):
         return self.connection.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
 
-    def save_segment(self, session_id, recording_start_ns, events):
+    def save_segment(self, session_id, recording_start_ns, events, pixel_scale=None):
         start = events[0].timestamp_ns
         duration = events[-1].timestamp_ns - start
         with self.connection:
             result = self.connection.execute(
                 "INSERT INTO segments(session_id, start_offset_ns, duration_ns, "
-                "event_count) VALUES (?, ?, ?, ?)",
-                (session_id, start - recording_start_ns, duration, len(events)),
+                "event_count, pixel_scale) VALUES (?, ?, ?, ?, ?)",
+                (session_id, start - recording_start_ns, duration, len(events), pixel_scale),
             )
             self.connection.executemany(
                 "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -94,8 +103,9 @@ class Database:
         cursor = self.connection.execute("""
             SELECT s.session_id, s.id AS segment_id, s.start_offset_ns,
                    s.duration_ns, e.sequence, e.t_ns, e.x, e.y,
-                   e.kind, e.button, e.wheel_delta
+                   e.kind, e.button, e.wheel_delta, ss.platform, s.pixel_scale
             FROM segments s JOIN events e ON e.segment_id = s.id
+            JOIN sessions ss ON ss.id = s.session_id
             ORDER BY s.id, e.sequence
         """)
         with open(path, "w", newline="", encoding="utf-8") as handle:

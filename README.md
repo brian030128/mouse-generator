@@ -1,21 +1,23 @@
 # Recorder
 
-A Windows desktop mouse recorder using Python's standard library. No packages
-need installing. Data stays in a local SQLite database.
+A Windows and macOS desktop mouse recorder using Python's standard library. No
+packages need installing. Data stays in a local SQLite database.
 
 ## Run
 
-Requires Windows and Python 3.10+ with Tk (included in the normal Windows installer).
+Requires Windows or macOS and Python 3.10+ with Tk (included in the normal
+python.org installers; with Homebrew Python also run `brew install python-tk`).
 
-**Double-click `Start Recorder.bat`** to open the recorder and immediately start
+On Windows, **double-click `Start Recorder.bat`**; on macOS, **double-click
+`Start Recorder.command`**. Either one opens the recorder and immediately start
 recording. Press **F8** anywhere to stop. You can also create a
-desktop shortcut to this launcher. It uses Python's windowed interpreter so no
-terminal stays open.
+desktop shortcut (Windows) or Dock alias (macOS) to the launcher. Neither
+leaves a terminal window open.
 
 Recording continues while the window is minimized or another app is in front.
 Keep the recorder running; closing its window stops recording.
 
-You can also open the recorder from PowerShell; recording starts immediately:
+You can also open the recorder from PowerShell or Terminal; recording starts immediately:
 
 ```powershell
 python recorder.py
@@ -26,19 +28,29 @@ Close the window to stop, or press **F8** anywhere. If you use F8, close and reo
 the app when you want to record again. CSV export remains available from the
 command line below.
 
-## Start with Windows
+## macOS permissions
 
-Turn on **Start recording when I sign in to Windows** to launch the visible
-recorder window and begin recording at your next Windows sign-in. Turn it off
+macOS may ask to allow **Input Monitoring** for the app that launched the
+recorder (Terminal, or Python itself when started at sign-in). Allow it under
+System Settings > Privacy & Security > Input Monitoring, then reopen the
+recorder. Without it, F8 does not stop recording (closing the window still
+works), and on some macOS versions no mouse events arrive. On Apple keyboards
+F8 is a media key by default; press **fn+F8**.
+
+## Start at sign-in
+
+Turn on **Start recording when I sign in to Windows** (or **…to macOS**) to launch the visible
+recorder window and begin recording at your next sign-in. Turn it off
 to remove this app's startup registration. The setting persists across restarts
 and is off by default. Changing it does not start or stop the current recording.
 
-This uses the current user's standard Windows `Run` registry key (entry
-`MouseDatasetRecorder`), requires no administrator access, and records only after
-you sign in, not before login. The registration uses absolute paths to Python,
+On Windows this uses the current user's standard `Run` registry key (entry
+`MouseDatasetRecorder`). On macOS it writes the per-user LaunchAgent
+`~/Library/LaunchAgents/com.mousedatasetrecorder.recorder.plist`. Neither needs
+administrator access, and both record only after you sign in, not before login. The registration uses absolute paths to Python,
 the script, and your database. If you move the app or change Python installations,
-turn the toggle off and on from the new location. Windows startup policies or
-disabling the entry in Windows settings can prevent automatic startup.
+turn the toggle off and on from the new location. Startup policies, or disabling the entry in
+Windows settings or macOS Login Items, can prevent automatic startup.
 
 ## Segment filtering
 
@@ -69,7 +81,7 @@ Default location: `data/mouse.sqlite3` beside the program. Each accepted segment
 is committed immediately; an interrupted session can have a NULL `ended_utc`.
 Every launch appends a new session to the same database, preserving earlier data.
 You can open the launcher each time you turn on your PC; no manual save is needed.
-Startup registration is controlled only by the Windows sign-in toggle.
+Startup registration is controlled only by the sign-in toggle.
 The window shows the current run's saved/discarded counts and **Total saved
 segments**, which includes previous runs and updates after each save.
 A record in this total means one accepted movement-to-click segment, not one event.
@@ -79,17 +91,31 @@ labels are empty. Existing recordings are preserved.
 
 | Table | Contents |
 | --- | --- |
-| `sessions` | UTC start/end, label, duration limit, virtual desktop bounds |
-| `segments` | Session ID, start offset, duration, event count |
+| `sessions` | UTC start/end, label, duration limit, virtual desktop bounds, platform |
+| `segments` | Session ID, start offset, duration, event count, pixel scale |
 | `events` | Segment ID, sequence, relative timestamp, x/y, event kind, button, wheel delta |
 
-Positions are physical screen pixels, including negative coordinates on monitors
-left of or above the primary monitor. Times use a monotonic clock in nanoseconds
-(units do not imply nanosecond measurement accuracy). Events are recorded when
-Windows delivers them, not at a fixed sampling rate; stationary time is represented
-by gaps between timestamps. OS-flagged injected mouse events are ignored.
+On Windows, positions are physical screen pixels. On macOS they are global
+display points (rounded; a Retina display has 2 pixels per point) with the origin
+at the top-left of the main display. Both platforms can produce negative
+coordinates on monitors left of or above the primary monitor. Wheel deltas use Windows units:
+120 per notch. On macOS, one scroll line counts as 120, including trackpad
+scrolling and the natural scrolling direction.
 
-The recorder uses a mouse hook while recording and checks only F8 as a stop
+To compare platforms, use `sessions.platform` (`win32` or `darwin`) and
+`segments.pixel_scale`: physical pixels per recorded unit on the display where the
+segment started. Multiply x/y by it for physical pixels. It is 1 on Windows and
+usually 2 on Retina displays. A segment that crosses displays with different
+scales keeps the starting display's value. Both columns are NULL for data recorded
+before they were added; opening an older database adds them without changing
+existing rows. Even in matching units, macOS and Windows pointer acceleration
+differ, so keep the platform as a label rather than pooling data blindly. Times use a monotonic clock in nanoseconds
+(units do not imply nanosecond measurement accuracy). Events are recorded when
+the OS delivers them, not at a fixed sampling rate; stationary time is represented
+by gaps between timestamps. OS-flagged injected mouse events are ignored (on macOS, events not originating
+from the HID system).
+
+The recorder uses a mouse hook (Windows) or listen-only event tap (macOS) while recording and checks only F8 as a stop
 control. It does not record typed text, window titles, page content or screenshots.
 It does not upload data. Capture applies to the normal interactive desktop;
 Windows secure desktop events are not captured. Keep monitor layout and scaling
@@ -103,9 +129,9 @@ python recorder.py --export data/mouse.csv
 python -m unittest -v
 ```
 
-CSV rows include session and segment IDs so separate trajectories stay distinct.
-The export contains every stored event; session labels and desktop metadata remain
-in SQLite. Close the recorder before copying its database, so SQLite can finish
+CSV rows include session and segment IDs so separate trajectories stay distinct,
+plus each segment's `platform` and `pixel_scale`. The export contains every stored
+event; session labels and desktop bounds remain in SQLite. Close the recorder before copying its database, so SQLite can finish
 its WAL checkpoint.
 
 ## Storage estimate

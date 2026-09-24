@@ -1,4 +1,4 @@
-"""Run with `python recorder.py`; Windows, Python 3.10+, no dependencies."""
+"""Run with `python recorder.py`; Windows or macOS, Python 3.10+, no dependencies."""
 
 import argparse
 from pathlib import Path
@@ -8,9 +8,15 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from capture import MouseCapture, configure_desktop, stop_key_pressed
+from capture import (SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at,
+                     stop_key_pressed)
 from segments import MAX_DURATION_NS, SegmentCollector
 from storage import Database
+
+MACOS = sys.platform == "darwin"
+SYSTEM_NAME = "macOS" if MACOS else "Windows"
+TITLE_FONT = ("Helvetica Neue", 20) if MACOS else ("Segoe UI", 17)
+STOP_KEY = "F8 (fn+F8 on Mac keyboards)" if MACOS else "F8"
 
 
 class RecorderApp:
@@ -31,20 +37,20 @@ class RecorderApp:
         root.protocol("WM_DELETE_WINDOW", self.close)
         panel = ttk.Frame(root, padding=20)
         panel.pack(fill="both", expand=True)
-        ttk.Label(panel, text="Recorder", font=("Segoe UI", 17)).pack(anchor="w")
+        ttk.Label(panel, text="Recorder", font=TITLE_FONT).pack(anchor="w")
         ttk.Label(panel, text="Recording starts automatically. Close the window to stop.").pack(anchor="w", pady=(5, 12))
         ttk.Label(panel, text="First cursor movement starts a segment; the next left-click ends it.\n"
                   "Over 8 seconds: keep the last 1.5 seconds. Unfinished intervals are discarded.").pack(anchor="w", pady=12)
         self.autostart = tk.BooleanVar(value=False)
         self.autostart_button = ttk.Checkbutton(
-            panel, text="Start recording when I sign in to Windows",
+            panel, text=f"Start recording when I sign in to {SYSTEM_NAME}",
             variable=self.autostart, command=self.toggle_autostart)
         self.autostart_button.pack(anchor="w", pady=(12, 0))
         try:
             self.autostart.set(self.startup.is_enabled())
         except OSError as error:
             self.autostart_button.configure(state="disabled")
-            messagebox.showerror("Cannot read Windows startup setting", str(error))
+            messagebox.showerror(f"Cannot read {SYSTEM_NAME} startup setting", str(error))
         self.status = tk.StringVar(value="Idle — recording is off")
         ttk.Label(panel, textvariable=self.status).pack(anchor="w", pady=(16, 5))
         self.counts = tk.StringVar(value="Saved: 0    Discarded: 0")
@@ -62,7 +68,7 @@ class RecorderApp:
             self.autostart.set(self.startup.is_enabled())
         except OSError as error:
             self.autostart.set(not requested)
-            messagebox.showerror("Cannot change Windows startup setting", str(error))
+            messagebox.showerror(f"Cannot change {SYSTEM_NAME} startup setting", str(error))
 
     def begin(self):
         if self.capture is not None:
@@ -72,18 +78,20 @@ class RecorderApp:
             self.update_total()
             self.recording_start_ns = time.perf_counter_ns()
             self.session_id = self.database.start_session(
-                "", MAX_DURATION_NS, self.screen)
+                "", MAX_DURATION_NS, self.screen, sys.platform)
             self.collector = SegmentCollector(self.save)
             self.update_counts()
             self.capture = MouseCapture()
             self.capture.start()
-            self.status.set("Recording — press F8 anywhere to stop")
+            self.status.set(f"Recording — press {STOP_KEY} anywhere to stop")
         except Exception as error:
             self.stop()
             messagebox.showerror("Cannot start recording", str(error))
 
     def save(self, events):
-        self.database.save_segment(self.session_id, self.recording_start_ns, events)
+        first = events[0]
+        self.database.save_segment(self.session_id, self.recording_start_ns, events,
+                                   pixel_scale_at(first.x, first.y))
         self.total_segments += 1
         self.update_total()
 
@@ -169,8 +177,8 @@ def main():
         finally:
             database.close()
         return
-    if sys.platform != "win32":
-        parser.error("Desktop recording requires Windows")
+    if not SUPPORTED:
+        parser.error("Desktop recording requires Windows or macOS")
     screen = configure_desktop()
     database = Database(args.db)
     root = tk.Tk()

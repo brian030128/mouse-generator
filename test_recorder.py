@@ -82,8 +82,10 @@ class StorageTests(unittest.TestCase):
             path = Path(directory) / "dataset.sqlite3"
             database = Database(path)
             self.assertEqual(database.count_segments(), 0)
-            session = database.start_session("test", 8_000_000_000, (-1920, 0, 3840, 1080))
-            collector = SegmentCollector(lambda items: database.save_segment(session, 0, items))
+            session = database.start_session("test", 8_000_000_000, (-1920, 0, 3840, 1080),
+                                              "darwin")
+            collector = SegmentCollector(
+                lambda items: database.save_segment(session, 0, items, 2.0))
             for item in [click(0), event(1), event(2), click(3), event(3.5), click(12)]:
                 collector.feed(item)
             collector.finish()
@@ -101,7 +103,29 @@ class StorageTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual([int(row["t_ns"]) for row in rows], [0, 1_000_000_000, 2_000_000_000])
             self.assertEqual(rows[0]["x"], "-100")
+            self.assertEqual((rows[0]["platform"], rows[0]["pixel_scale"]), ("darwin", "2.0"))
             self.assertIsNotNone(database.connection.execute("SELECT ended_utc FROM sessions").fetchone()[0])
+            database.close()
+
+    def test_database_from_before_platform_columns_is_upgraded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.sqlite3"
+            database = Database(path)
+            session = database.start_session("", 8_000_000_000, (0, 0, 1920, 1080))
+            database.save_segment(session, 0, [event(0), click(1)])
+            # Recreate the original schema: same rows, without the added columns.
+            database.connection.executescript("""
+                ALTER TABLE sessions DROP COLUMN platform;
+                ALTER TABLE segments DROP COLUMN pixel_scale;
+            """)
+            database.close()
+            database = Database(path)
+            self.assertEqual(database.connection.execute(
+                "SELECT ss.platform, s.pixel_scale FROM segments s "
+                "JOIN sessions ss ON ss.id = s.session_id").fetchall(), [(None, None)])
+            session = database.start_session("", 8_000_000_000, (0, 0, 1920, 1080), "win32")
+            database.save_segment(session, 0, [event(0), click(1)], 1.0)
+            self.assertEqual(database.count_segments(), 2)
             database.close()
 
 
