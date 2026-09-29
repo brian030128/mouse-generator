@@ -217,7 +217,34 @@ values give smoother, more typical paths.
 `generator.evaluate` asks each model to travel the same start-to-click vector
 as each held-out real segment, compares summary statistics, and trains a random
 forest to tell real from generated (the white-box test in the DMTG paper; 50%
-means indistinguishable). Results are in `models/eval/report.json` and the
-figures `models/eval/trajectories.png` and `models/eval/speed_profile.png`.
+means indistinguishable). Results are in `models/comparison/report.json` and
+the figures `models/comparison/trajectories.png` and
+`models/comparison/speed_profile.png`.
 
-EVAL_TABLE_PLACEHOLDER
+On 3,000 held-out segments from six recording sessions the models never saw
+(medians; GRU at temperature 0.8, DMTG at its default settings):
+
+| | real | GRU | DMTG |
+| --- | --- | --- | --- |
+| events per segment | 21 | 21 | 44 |
+| duration, ms | 210 | 259 | 333 |
+| path length / displacement | 1.16 | 1.17 | 1.36 |
+| peak speed, px/ms | 1.37 | 1.25 | 1.23 |
+| duration for 150–300 px moves, ms | 795 | 806 | 648 |
+| duration for 600–1200 px moves, ms | 1553 | 1946 | 1547 |
+| click lands on target | always | 99.4% of samples | pinned |
+| detector accuracy, all features | | 77.6% | 98.0% |
+| detector accuracy, shape only | | 64.3% | 88.1% |
+
+The GRU reproduces event counts, path efficiency and the duration-versus-
+distance relationship, and is the harder of the two to detect. The detector's
+strongest tell is timing jitter, and that is a difference between sessions
+rather than a model error: 6–7 ms poll gaps make up 3.1% of gaps in the
+training sessions and 6.1% in the held-out ones, and the GRU produces 3.4%.
+Sessions differ in jitter, so expect real recordings from a new machine to
+differ from any model in the same way. DMTG's paths are smooth and land exactly on
+the target, but they are wigglier than real ones and, because the paper's
+model has no notion of event timing, its uniform re-timed gaps and lack of
+pauses are easy to spot; the paper itself reports 87–91% detection against
+strong classifiers. Use the GRU for replay; DMTG is kept for comparison and as
+a base for further work.

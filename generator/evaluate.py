@@ -241,7 +241,7 @@ def main():
     parser.add_argument("--db", default="data/mouse.sqlite3")
     parser.add_argument("--gru", default="models/mouse_gru.pt", help="GRU checkpoint, or '' to skip")
     parser.add_argument("--dmtg", default="models/mouse_dmtg.pt", help="DMTG checkpoint, or '' to skip")
-    parser.add_argument("--out", default="models/eval")
+    parser.add_argument("--out", default="models/comparison")
     parser.add_argument("--limit", type=int, default=3000)
     parser.add_argument("--temperature", type=float, default=0.8, help="GRU sampling temperature")
     parser.add_argument("--min-displacement", type=float, default=3.0,
