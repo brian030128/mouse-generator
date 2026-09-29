@@ -117,5 +117,43 @@ class DiffusionTests(unittest.TestCase):
             self.assertTrue((np.diff(r[:, 0]) > 0).all())
 
 
+class BeCaptchaTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "t.sqlite3"
+        make_database(self.path)
+        self.segments = load_segments(self.path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_function_based_paths_end_on_target(self):
+        from generator.becaptcha import PROFILES, SHAPES, fit_human_stats, generate_function_based
+        stats = fit_human_stats(self.segments)
+        for shape in SHAPES:
+            for profile in PROFILES:
+                rows = generate_function_based(stats, [(10, 20)], [(310, 120)], seed=1,
+                                               shape=shape, profile=profile)[0]
+                self.assertTrue(np.isfinite(rows).all())
+                np.testing.assert_allclose(rows[0, 1:3], [10, 20])
+                np.testing.assert_allclose(rows[-1, 1:3], [310, 120])
+                self.assertEqual(rows[-1, 3], 1.0)
+                self.assertTrue((np.diff(rows[:, 0]) > 0).all())
+        straight = generate_function_based(stats, [(0, 0)], [(100, 0)], seed=1, shape="linear")[0]
+        self.assertTrue((straight[:, 2] == 0).all())
+
+    def test_gan_trains_and_generates(self):
+        from generator.becaptcha import canonical_paths, fit_human_stats, generate_gan, train_gan
+        paths = canonical_paths(self.segments, min_displacement=1.0)
+        self.assertEqual(paths.shape[1:], (64, 2))
+        np.testing.assert_allclose(paths[0, -1], [1, 0], atol=1e-5)
+        g, history = train_gan(paths, epochs=1, batch_size=4, device="cpu", log=lambda s: None)
+        self.assertEqual(len(history), 1)
+        rows = generate_gan(g, fit_human_stats(self.segments), [(5, 5)], [(205, 105)], seed=0)[0]
+        np.testing.assert_allclose(rows[0, 1:3], [5, 5])
+        np.testing.assert_allclose(rows[-1, 1:3], [205, 105])
+        self.assertTrue((np.diff(rows[:, 0]) > 0).all())
+
+
 if __name__ == "__main__":
     unittest.main()

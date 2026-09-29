@@ -177,7 +177,7 @@ def plot(real_rows, generated, targets, path, n=18, seed=0):
     cols = 6
     rows_n = int(np.ceil(len(idx) / cols))
     fig, axes = plt.subplots(rows_n, cols, figsize=(cols * 3, rows_n * 3))
-    colors = ["tab:red", "tab:green", "tab:purple"]
+    colors = ["tab:red", "tab:green", "tab:purple", "tab:orange", "tab:brown"]
     for ax, i in zip(axes.flat, idx):
         series = [("real", real_rows[i], "tab:blue")] + [
             (name, rows[i], colors[k]) for k, (name, rows) in enumerate(generated.items())]
@@ -225,7 +225,8 @@ def plot_speed_profiles(real_rows, generated, path, bins=20):
     fig, ax = plt.subplots(figsize=(6, 3.5))
     x = (np.arange(bins) + 0.5) / bins
     ax.plot(x, profiles(real_rows), label="real", color="tab:blue")
-    for (name, rows), color in zip(generated.items(), ["tab:red", "tab:green", "tab:purple"]):
+    for (name, rows), color in zip(generated.items(),
+                                   ["tab:red", "tab:green", "tab:purple", "tab:orange", "tab:brown"]):
         ax.plot(x, profiles(rows), label=name, color=color)
     ax.set_xlabel("fraction of movement time")
     ax.set_ylabel("speed / peak speed (mean)")
@@ -244,6 +245,10 @@ def main():
     parser.add_argument("--db", default="data/mouse.sqlite3")
     parser.add_argument("--gru", default="models/mouse_gru.pt", help="GRU checkpoint, or '' to skip")
     parser.add_argument("--dmtg", default="models/mouse_dmtg.pt", help="DMTG checkpoint, or '' to skip")
+    parser.add_argument("--becaptcha-gan", default="models/mouse_becaptcha_gan.pt",
+                        help="BeCAPTCHA-Mouse GAN checkpoint, or '' to skip")
+    parser.add_argument("--no-becaptcha-fn", action="store_true",
+                        help="skip the BeCAPTCHA-Mouse function-based generator")
     parser.add_argument("--out", default="models/comparison")
     parser.add_argument("--limit", type=int, default=3000)
     parser.add_argument("--temperature", type=float, default=0.8, help="GRU sampling temperature")
@@ -254,7 +259,7 @@ def main():
     args = parser.parse_args()
 
     segments = load_segments(args.db)
-    _, val = split_by_session(segments, args.holdout, args.seed)
+    train, val = split_by_session(segments, args.holdout, args.seed)
     val = [s for s in val if np.hypot(*s.steps[:, :2].sum(0)) >= args.min_displacement]
     rng = np.random.default_rng(args.seed)
     if len(val) > args.limit:
@@ -283,6 +288,14 @@ def main():
             rows.extend(generate_dmtg(model, starts[i:i + 512], targets[i:i + 512], seed=args.seed + i,
                                       tick_quantiles=tick_quantiles))
         generated["dmtg"] = rows
+    if not args.no_becaptcha_fn or (args.becaptcha_gan and Path(args.becaptcha_gan).exists()):
+        from .becaptcha import fit_human_stats, generate_function_based, generate_gan, load_becaptcha
+        if not args.no_becaptcha_fn:
+            stats = fit_human_stats(train)
+            generated["bc_fn"] = generate_function_based(stats, starts, targets, seed=args.seed)
+        if args.becaptcha_gan and Path(args.becaptcha_gan).exists():
+            gan, stats = load_becaptcha(args.becaptcha_gan)
+            generated["bc_gan"] = generate_gan(gan, stats, starts, targets, seed=args.seed)
     if not generated:
         raise SystemExit("no checkpoint found; pass --gru and/or --dmtg")
 
@@ -304,14 +317,14 @@ def main():
 
     names = ["real"] + list(generated)
     print(f"held-out segments compared: {len(val)}")
-    print(f"{'metric (median, p25-p75)':<24}" + "".join(f"{n:>26}" for n in names))
+    print(f"{'metric (median, p25-p75)':<24}" + "".join(f"{n:>24}" for n in names))
 
     def line(label, key, fmt="{:.1f}"):
         cells = []
         for n in names:
             s = report[n][key]
             cells.append(f"{fmt.format(s['median'])} ({fmt.format(s['p25'])}-{fmt.format(s['p75'])})")
-        print(f"{label:<24}" + "".join(f"{c:>26}" for c in cells))
+        print(f"{label:<24}" + "".join(f"{c:>24}" for c in cells))
 
     line("steps", "steps")
     line("duration ms", "duration_ms")
@@ -321,7 +334,7 @@ def main():
     line("peak time fraction", "peak_time_frac", "{:.2f}")
     line("median dt ms", "median_dt", "{:.2f}")
     line("pause frac (>100ms)", "long_pause_frac", "{:.3f}")
-    print(f"{'clicked fraction':<24}" + "".join(f"{report[n]['clicked_frac']:>26.3f}" for n in names))
+    print(f"{'clicked fraction':<24}" + "".join(f"{report[n]['clicked_frac']:>24.3f}" for n in names))
     print("median duration ms by displacement px")
     tables = {n: {row["range"]: row for row in report["duration_by_distance"][n]} for n in names}
     for row in report["duration_by_distance"]["real"]:

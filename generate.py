@@ -29,6 +29,10 @@ def main():
     parser.add_argument("--model", default=None, help="checkpoint path (default: models/mouse_gru.pt "
                         "or models/mouse_dmtg.pt with --dmtg)")
     parser.add_argument("--dmtg", action="store_true", help="use the DMTG diffusion model")
+    parser.add_argument("--becaptcha-gan", action="store_true", help="use the BeCAPTCHA-Mouse GAN")
+    parser.add_argument("--becaptcha-fn", action="store_true",
+                        help="use the BeCAPTCHA-Mouse function-based generator (needs --db)")
+    parser.add_argument("--db", default="data/mouse.sqlite3", help="recordings, for --becaptcha-fn")
     parser.add_argument("--alpha", type=float, default=None,
                         help="DMTG complexity: path length / displacement - 1 (default: sampled)")
     parser.add_argument("--temperature", type=float, default=0.8,
@@ -38,7 +42,16 @@ def main():
     parser.add_argument("--plot", help="save a PNG of the path")
     args = parser.parse_args()
 
-    if args.dmtg:
+    if args.becaptcha_gan:
+        from generator.becaptcha import default_becaptcha_checkpoint, generate_gan, load_becaptcha
+        gan, stats = load_becaptcha(args.model or default_becaptcha_checkpoint())
+        rows = generate_gan(gan, stats, [(args.x0, args.y0)], [(args.x1, args.y1)], seed=args.seed)[0]
+    elif args.becaptcha_fn:
+        from generator.becaptcha import fit_human_stats, generate_function_based
+        from generator.data import load_segments, split_by_session
+        stats = fit_human_stats(split_by_session(load_segments(args.db))[0])
+        rows = generate_function_based(stats, [(args.x0, args.y0)], [(args.x1, args.y1)], seed=args.seed)[0]
+    elif args.dmtg:
         from generator.diffusion import default_dmtg_checkpoint, generate_dmtg, load_dmtg
         model = load_dmtg(args.model or default_dmtg_checkpoint())
         rows = generate_dmtg(model, [(args.x0, args.y0)], [(args.x1, args.y1)], alpha=args.alpha,

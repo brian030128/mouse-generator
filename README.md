@@ -189,9 +189,21 @@ unspecified; `generator/diffusion.py` documents each choice made here. A small
 head predicts the movement duration and the path is re-timed at recorded poll
 gaps so that its output can be replayed and compared.
 
+**BeCAPTCHA-Mouse (`generator/becaptcha.py`).** The two bot generators from
+*BeCAPTCHA-Mouse: Synthetic Mouse Trajectories and Improved Bot Detection*
+(Acien et al., arXiv:2005.00890), included as baselines. The function-based
+generator crosses a path shape (linear, quadratic, exponential) with a
+velocity profile (constant, accelerating, bell-shaped), drawing the point
+count and curvature from the human recordings. The GAN is the paper's LSTM
+generator and discriminator trained with its settings; since it is
+unconditional, it is trained in a start-to-end frame and each sample is
+rotated and scaled onto the requested points. Both use recorded poll gaps for
+timing, which the paper (200 Hz data) does not model.
+
 ```powershell
 python -m generator.train --db data/mouse.sqlite3 --epochs 100      # GRU, ~20 min on an RTX 4060
 python -m generator.diffusion --db data/mouse.sqlite3 --epochs 150  # DMTG, ~25 min
+python -m generator.becaptcha --db data/mouse.sqlite3               # BeCAPTCHA GAN, ~3 min
 python -m generator.evaluate --db data/mouse.sqlite3                # held-out comparison + plots
 python generate.py 400 300 1200 700                                 # one GRU path, printed
 python generate.py 400 300 1200 700 --json                          # for another program
@@ -224,17 +236,17 @@ the figures `models/comparison/trajectories.png` and
 On 3,000 held-out segments from six recording sessions the models never saw
 (medians; GRU at temperature 0.8, DMTG at its default settings):
 
-| | real | GRU | DMTG |
-| --- | --- | --- | --- |
-| events per segment | 21 | 21 | 44 |
-| duration, ms | 210 | 259 | 333 |
-| path length / displacement | 1.16 | 1.17 | 1.36 |
-| peak speed, px/ms | 1.37 | 1.25 | 1.23 |
-| duration for 150–300 px moves, ms | 795 | 806 | 648 |
-| duration for 600–1200 px moves, ms | 1553 | 1946 | 1547 |
-| click lands on target | always | 99.4% of samples | pinned |
-| detector accuracy, all features | | 76.9% | 98.0% |
-| detector accuracy, shape only | | 61.9% | 88.1% |
+| | real | GRU | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
+| --- | --- | --- | --- | --- | --- |
+| events per segment | 21 | 21 | 44 | 24 | 24 |
+| duration, ms | 210 | 259 | 333 | 187 | 185 |
+| path length / displacement | 1.16 | 1.17 | 1.36 | 1.04 | 1.25 |
+| peak speed, px/ms | 1.37 | 1.25 | 1.23 | 0.83 | 1.52 |
+| duration for 150–300 px moves, ms | 795 | 806 | 648 | 414 | 447 |
+| duration for 600–1200 px moves, ms | 1553 | 1946 | 1547 | 922 | 846 |
+| click lands on target | always | 99.4% of samples | pinned | pinned | pinned |
+| detector accuracy, all features | | 76.9% | 98.0% | 99.2% | 98.9% |
+| detector accuracy, shape only | | 61.9% | 88.1% | 96.3% | 88.6% |
 
 The detector is a 300-tree random forest scored by 5-fold cross-validation on
 the 3,000 real and 3,000 generated trajectories, using the path resampled to
@@ -257,6 +269,15 @@ GRU and 93% against DMTG with a handful of rules.
   repeats positions on short moves), and near-reversal heading changes from
   residual denoising noise. The paper itself reports 87–91% detection against
   strong classifiers.
+- **BeCAPTCHA-Mouse.** Both baselines are caught almost every time, as in
+  the paper (98–99% with its neuromotor detector). The function-based paths
+  are too clean: no pauses, nearly straight (path/displacement 1.04), and
+  a velocity profile that is either flat, still accelerating at the click
+  (peak at 66% of the movement), or a symmetric bell. The GAN learns
+  plausible shapes (shape-only detection 88.6%, on par with DMTG) but, like
+  DMTG, has no timing of its own; both baselines also finish long moves in
+  about half the real time because the human point count they draw from
+  excludes the pauses inside real segments.
 
 Use the GRU for replay; DMTG is kept for comparison and as a base for further
 work. Because jitter is per machine, recording a short session on the machine
