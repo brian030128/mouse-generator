@@ -156,3 +156,68 @@ depends on events per segment and stored values. As a rough planning estimate:
 Segment estimates extrapolate the benchmark; allow additional disk space for
 SQLite's active WAL file and any CSV exports. A segment is a whole movement
 ending in a click, while an event is one position or button/wheel update.
+
+## Trajectory generator
+
+`generator/` trains a model on the recorded segments and samples new
+movement-to-click paths between any two screen points. It needs PyTorch and
+NumPy (matplotlib only for the plots); a CUDA GPU makes training fast but is
+not required for sampling.
+
+Two generators are included.
+
+**GRU (default, `models/mouse_gru.pt`).** A 3-layer GRU (5.2M parameters)
+emits one mouse event at a time, in the style of SketchRNN: a click
+probability, then the time gap as a categorical over 78 fine bins of the
+recorded gap distribution (most gaps sit within 0.3 ms of the 7.5 ms poll
+interval, with jitter and pauses in the tails), then the step displacement as a
+mixture of bivariate Gaussians conditioned on that gap. Every step is
+conditioned on the vector still to travel to the target, so a sampled path ends
+where you ask and decides on its own when to press the button. Events keep the
+recorder's native timing, so a replay can move the cursor at the sampled times
+and click on the final row.
+
+**DMTG (`models/mouse_dmtg.pt`).** A reimplementation of *DMTG: A Human-Like
+Mouse Trajectory Generation Bot Based on Entropy-Controlled Diffusion Networks*
+(Liu et al., arXiv:2410.18233): a 1D U-Net denoiser over a fixed-length
+sequence of 64 coordinates, conditioned on the end point and a complexity
+factor alpha (path length over displacement), trained with the diffusion loss
+plus an x0 reconstruction term and the paper's path-length style term, and
+sampled with DDIM from the paper's mixture-of-Gaussians initial noise. The
+paper generates coordinates only and leaves several hyperparameters
+unspecified; `generator/diffusion.py` documents each choice made here. A small
+head predicts the movement duration and the path is re-timed at recorded poll
+gaps so that its output can be replayed and compared.
+
+```powershell
+python -m generator.train --db data/mouse.sqlite3 --epochs 100      # GRU, ~20 min on an RTX 4060
+python -m generator.diffusion --db data/mouse.sqlite3 --epochs 150  # DMTG, ~25 min
+python -m generator.evaluate --db data/mouse.sqlite3                # held-out comparison + plots
+python generate.py 400 300 1200 700                                 # one GRU path, printed
+python generate.py 400 300 1200 700 --json                          # for another program
+python generate.py 400 300 1200 700 --dmtg --plot path.png          # DMTG path with a picture
+python -m unittest test_generator -v
+```
+
+From Python:
+
+```python
+from generator.sample import load_model, generate, default_checkpoint
+model = load_model(default_checkpoint())
+rows = generate(model, (400, 300), (1200, 700))   # columns: t_ms, x, y, click
+```
+
+Training holds out whole recording sessions (about 10% of segments) and keeps
+the checkpoint with the best held-out loss. `--temperature` scales the GRU's
+step-displacement mixture: 1.0 samples the learned distribution exactly, lower
+values give smoother, more typical paths.
+
+### How the generators compare
+
+`generator.evaluate` asks each model to travel the same start-to-click vector
+as each held-out real segment, compares summary statistics, and trains a random
+forest to tell real from generated (the white-box test in the DMTG paper; 50%
+means indistinguishable). Results are in `models/eval/report.json` and the
+figures `models/eval/trajectories.png` and `models/eval/speed_profile.png`.
+
+EVAL_TABLE_PLACEHOLDER

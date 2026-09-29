@@ -1,0 +1,122 @@
+"""Train the trajectory model.
+
+    python -m generator.train --db data/mouse.sqlite3 --epochs 30
+"""
+
+import argparse
+import json
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from .data import BucketSampler, StepDataset, collate, load_segments, split_by_session
+from .model import MouseModel, make_dt_edges
+
+
+def evaluate(model, loader, device):
+    model.eval()
+    total = 0.0
+    parts = {"nll_xy": 0.0, "nll_dt": 0.0, "click_bce": 0.0}
+    steps = 0.0
+    with torch.no_grad():
+        for inputs, targets, mask in loader:
+            inputs, targets, mask = inputs.to(device), targets.to(device), mask.to(device)
+            out, _ = model(inputs)
+            loss, info = model.loss(out, targets, mask)
+            n = mask.sum().item()
+            total += loss.item() * n
+            for k in parts:
+                parts[k] += info[k] * n
+            steps += n
+    model.train()
+    return total / steps, {k: v / steps for k, v in parts.items()}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db", default="data/mouse.sqlite3")
+    parser.add_argument("--out", default="models/mouse_gru.pt")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--hidden", type=int, default=512)
+    parser.add_argument("--layers", type=int, default=3)
+    parser.add_argument("--mixtures", type=int, default=20)
+    parser.add_argument("--dt-bins", type=int, default=64, help="quantile bins for the time gap")
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--holdout", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    segments = load_segments(args.db)
+    train_segments, val_segments = split_by_session(segments, args.holdout, args.seed)
+    print(f"segments: {len(segments)} total, {len(train_segments)} train, {len(val_segments)} val")
+    train_set, val_set = StepDataset(train_segments), StepDataset(val_segments)
+    print(f"steps: {sum(train_set.lengths)} train, {sum(val_set.lengths)} val")
+
+    train_loader = torch.utils.data.DataLoader(
+        train_set, batch_sampler=BucketSampler(train_set.lengths, args.batch_size, True, args.seed),
+        collate_fn=collate)
+    val_loader = torch.utils.data.DataLoader(
+        val_set, batch_sampler=BucketSampler(val_set.lengths, args.batch_size, False),
+        collate_fn=collate)
+
+    dt_edges = make_dt_edges(np.concatenate([s.steps[:, 2] for s in train_segments]), args.dt_bins)
+    print(f"time-gap bins: {len(dt_edges) + 1}")
+    model = MouseModel(args.hidden, args.layers, args.mixtures, args.dropout, dt_edges).to(device)
+    print(f"parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M on {device}")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    total_updates = args.epochs * len(train_loader)
+    warmup = min(500, total_updates // 10)
+
+    def lr_at(update):
+        if update < warmup:
+            return args.lr * (update + 1) / warmup
+        progress = (update - warmup) / max(1, total_updates - warmup)
+        return args.lr * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * progress)))
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    history = []
+    best = float("inf")
+    update = 0
+    for epoch in range(1, args.epochs + 1):
+        start = time.time()
+        running = 0.0
+        count = 0
+        for inputs, targets, mask in train_loader:
+            for group in optimizer.param_groups:
+                group["lr"] = lr_at(update)
+            inputs, targets, mask = inputs.to(device), targets.to(device), mask.to(device)
+            out, _ = model(inputs)
+            loss, _ = model.loss(out, targets, mask)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            running += loss.item()
+            count += 1
+            update += 1
+        val_loss, parts = evaluate(model, val_loader, device)
+        record = {"epoch": epoch, "train_loss": running / count, "val_loss": val_loss,
+                  **parts, "seconds": time.time() - start}
+        history.append(record)
+        print(json.dumps(record))
+        if val_loss < best:
+            best = val_loss
+            torch.save({"model": model.state_dict(), "config": model.config,
+                        "epoch": epoch, "val_loss": val_loss}, out_path)
+    with open(out_path.with_suffix(".history.json"), "w", encoding="utf-8") as handle:
+        json.dump(history, handle, indent=1)
+    print(f"best val loss {best:.4f}; saved {out_path}")
+
+
+if __name__ == "__main__":
+    main()
