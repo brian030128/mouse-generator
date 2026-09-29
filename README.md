@@ -233,18 +233,32 @@ On 3,000 held-out segments from six recording sessions the models never saw
 | duration for 150–300 px moves, ms | 795 | 806 | 648 |
 | duration for 600–1200 px moves, ms | 1553 | 1946 | 1547 |
 | click lands on target | always | 99.4% of samples | pinned |
-| detector accuracy, all features | | 77.6% | 98.0% |
-| detector accuracy, shape only | | 64.3% | 88.1% |
+| detector accuracy, all features | | 76.9% | 98.0% |
+| detector accuracy, shape only | | 61.9% | 88.1% |
 
-The GRU reproduces event counts, path efficiency and the duration-versus-
-distance relationship, and is the harder of the two to detect. The detector's
-strongest tell is timing jitter, and that is a difference between sessions
-rather than a model error: 6–7 ms poll gaps make up 3.1% of gaps in the
-training sessions and 6.1% in the held-out ones, and the GRU produces 3.4%.
-Sessions differ in jitter, so expect real recordings from a new machine to
-differ from any model in the same way. DMTG's paths are smooth and land exactly on
-the target, but they are wigglier than real ones and, because the paper's
-model has no notion of event timing, its uniform re-timed gaps and lack of
-pauses are easy to spot; the paper itself reports 87–91% detection against
-strong classifiers. Use the GRU for replay; DMTG is kept for comparison and as
-a base for further work.
+The detector is a 300-tree random forest scored by 5-fold cross-validation on
+the 3,000 real and 3,000 generated trajectories, using the path resampled to
+24 points in a start-to-click frame, a histogram of time gaps around the
+7.5 ms poll interval, and speed, acceleration, turning and duration summaries.
+The forest is explainable: a depth-3 decision tree reaches 69% against the
+GRU and 93% against DMTG with a handful of rules.
+
+- **GRU.** The main tell is poll-timing jitter. 66% of real trajectories
+  contain a gap of 4.5–6.7 ms (an event delivered late, usually followed by an
+  8–12 ms gap), but only 39% of GRU trajectories do. Most of that is a
+  difference between sessions rather than a model error: such gaps make up
+  3.1% of gaps in the training sessions and 6.1% in the held-out ones, and the
+  GRU produces 3.4%. On training-session segments the detector drops to 71%.
+  The weaker shape tells are a slightly higher overshoot rate past the target
+  and a shorter final approach.
+- **DMTG.** Three rules catch it: no gap over 20 ms (real paths pause; a
+  timing-free model re-timed at poll rate never does), a 20% share of
+  zero-length steps versus 5% (a 64-point path re-timed at 7.5 ms ticks
+  repeats positions on short moves), and near-reversal heading changes from
+  residual denoising noise. The paper itself reports 87–91% detection against
+  strong classifiers.
+
+Use the GRU for replay; DMTG is kept for comparison and as a base for further
+work. Because jitter is per machine, recording a short session on the machine
+that will replay the paths and matching its gap distribution is the most
+direct way to lower the GRU's detectability.

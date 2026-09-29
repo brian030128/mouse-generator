@@ -82,12 +82,15 @@ def shape_features(rows, target, n=24):
     """Features a bot detector would plausibly use.
 
     The path is resampled uniformly in time to n points, expressed in a frame
-    where the start is the origin and the target lies at (1, 0), so the
-    classifier sees shape and speed profile rather than screen position.
+    where the start is the origin and the final (click) position lies at
+    (1, 0), so the classifier sees shape and speed profile rather than screen
+    position. The frame uses the click rather than the requested target: a real
+    segment's target is its own click by definition, so a generated click that
+    lands a rounding pixel off would otherwise be a giveaway.
     """
     xy = rows[:, 1:3] - rows[0, 1:3]
     t = rows[:, 0]
-    d = target - rows[0, 1:3]
+    d = rows[-1, 1:3] - rows[0, 1:3]
     disp = max(float(np.hypot(*d)), 1.0)
     c, s = d[0] / disp, d[1] / disp
     rot = np.array([[c, s], [-s, c]])
