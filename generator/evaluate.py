@@ -139,6 +139,7 @@ def classifier_test(real_rows, gen_rows, targets, seed=0):
     the most important features of the full model.
     """
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
     x = np.stack([shape_features(r, t) for r, t in zip(real_rows, targets)] +
@@ -147,16 +148,21 @@ def classifier_test(real_rows, gen_rows, targets, seed=0):
     x = np.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
 
     def run(columns):
+        """Accuracy, precision/recall/F1 for the generated class, ROC AUC."""
         clf = RandomForestClassifier(300, min_samples_leaf=3, n_jobs=-1, random_state=seed)
         cv = StratifiedKFold(5, shuffle=True, random_state=seed)
-        pred = cross_val_predict(clf, x[:, columns], y, cv=cv)
+        proba = cross_val_predict(clf, x[:, columns], y, cv=cv, method="predict_proba")[:, 1]
+        pred = proba >= 0.5
+        precision, recall, f1, _ = precision_recall_fscore_support(y, pred, average="binary")
         clf.fit(x[:, columns], y)
-        return float((pred == y).mean()), clf.feature_importances_
+        return {"accuracy": float((pred == y).mean()), "precision": float(precision),
+                "recall": float(recall), "f1": float(f1),
+                "auc": float(roc_auc_score(y, proba))}, clf.feature_importances_
 
-    accuracy, importances = run(list(range(x.shape[1])))
-    shape_accuracy, _ = run(SHAPE_FEATURES)
+    full, importances = run(list(range(x.shape[1])))
+    shape, _ = run(SHAPE_FEATURES)
     order = np.argsort(importances)[::-1][:8]
-    return {"accuracy": accuracy, "shape_accuracy": shape_accuracy,
+    return {**full, "shape_accuracy": shape["accuracy"], "shape": shape,
             "top_features": [(FEATURE_NAMES[i], float(importances[i])) for i in order]}
 
 
@@ -352,8 +358,9 @@ def main():
     for n in generated:
         c = report["classifier"][n]
         top = ", ".join(f"{f} {v:.2f}" for f, v in c["top_features"][:5])
-        print(f"  {n:<6} all features {c['accuracy'] * 100:.1f}%, shape only {c['shape_accuracy'] * 100:.1f}%"
-              f"   top features: {top}")
+        print(f"  {n:<9} all features: acc {c['accuracy'] * 100:.1f}% F1 {c['f1'] * 100:.1f}% "
+              f"AUC {c['auc']:.3f} | shape only: acc {c['shape_accuracy'] * 100:.1f}% "
+              f"F1 {c['shape']['f1'] * 100:.1f}% AUC {c['shape']['auc']:.3f} | top: {top}")
     print(f"wrote {out / 'report.json'}, {out / 'trajectories.png'}, {out / 'speed_profile.png'}")
 
 
