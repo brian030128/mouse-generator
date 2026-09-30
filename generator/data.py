@@ -21,7 +21,14 @@ REMAINING_SCALE = 500.0
 MIN_DT_MS = 0.5
 STEP_FEATURES = 4      # dx, dy, log dt, click
 CONTEXT_FEATURES = 9   # remaining vector encodings + elapsed time + start flag
-INPUT_FEATURES = STEP_FEATURES + CONTEXT_FEATURES
+# Timing profile: how a machine's poll gaps spread around the ~7.5 ms tick.
+# Jitter differs per machine and session, so the model is told which
+# signature to reproduce instead of learning one blend of all sessions.
+TICK_BANDS_MS = (0.0, 4.5, 6.0, 7.0, 7.25, 7.5, 7.75, 8.0, 9.0, 12.0, 20.0)
+PROFILE_FEATURES = len(TICK_BANDS_MS) - 1
+INPUT_FEATURES = STEP_FEATURES + CONTEXT_FEATURES + PROFILE_FEATURES
+DEFAULT_PROFILE = np.array([0.010, 0.020, 0.063, 0.038, 0.336, 0.318, 0.035, 0.063, 0.052, 0.065],
+                           dtype=np.float32)
 
 
 @dataclass
@@ -29,6 +36,63 @@ class Segment:
     session_id: int
     steps: np.ndarray   # (n, 4): dx, dy, dt_ms, click
     start: np.ndarray   # (2,) absolute position of the first move event
+    profile: np.ndarray = None   # (PROFILE_FEATURES,) timing profile of its session
+
+
+def timing_profile(gaps_ms, minimum=50):
+    """Fractions of sub-20 ms gaps falling in each tick band, or None if too few."""
+    g = np.asarray(gaps_ms, dtype=np.float64)
+    g = g[g < TICK_BANDS_MS[-1]]
+    if len(g) < minimum:
+        return None
+    return (np.histogram(g, TICK_BANDS_MS)[0] / len(g)).astype(np.float32)
+
+
+def session_profiles(segments):
+    """Timing profile per session id, from all move gaps recorded in it."""
+    gaps = {}
+    for s in segments:
+        gaps.setdefault(s.session_id, []).append(s.steps[:-1, 2])
+    profiles = {}
+    for sid, parts in gaps.items():
+        p = timing_profile(np.concatenate(parts))
+        if p is not None:
+            profiles[sid] = p
+    return profiles
+
+
+def assign_profiles(segments, profiles, default):
+    for s in segments:
+        s.profile = profiles.get(s.session_id, default)
+
+
+def assign_local_profiles(segments, default, rng, window=(200, 5000), minimum=50):
+    """Give each segment a profile from a random-sized window of gaps around
+    it within its session (segments are in recording order).
+
+    Training on these rather than one profile per session gives the model
+    many distinct profiles, so it learns how a profile maps to gap behaviour
+    instead of memorising sessions, and it follows jitter that drifts within a
+    session. Sessions with too few gaps fall back to the default.
+    """
+    by_session = {}
+    for s in segments:
+        by_session.setdefault(s.session_id, []).append(s)
+    for group in by_session.values():
+        parts = [s.steps[:-1, 2] for s in group]
+        gaps = np.concatenate(parts)
+        if len(gaps) < minimum:
+            for s in group:
+                s.profile = default
+            continue
+        ends = np.cumsum([len(p) for p in parts])
+        for s, end in zip(group, ends):
+            centre = end - len(s.steps) // 2
+            half = int(np.exp(rng.uniform(np.log(window[0]), np.log(window[1])))) // 2
+            lo, hi = max(0, centre - half), min(len(gaps), centre + half)
+            if hi - lo < minimum:
+                lo, hi = max(0, centre - minimum), min(len(gaps), centre + minimum)
+            s.profile = timing_profile(gaps[lo:hi], minimum=1)
 
 
 def load_segments(db_path, max_steps=512, min_steps=1):
@@ -147,7 +211,9 @@ def segment_to_arrays(segment):
     is_start = np.zeros(n, np.float32)
     is_start[0] = 1.0
     prev = np.vstack([np.zeros((1, 4), np.float32), encode_step(steps[:-1])])
-    inputs = np.concatenate([prev, context_features(remaining, elapsed, is_start)], axis=-1)
+    profile = DEFAULT_PROFILE if segment.profile is None else segment.profile
+    profile = np.broadcast_to(profile.astype(np.float32), (n, PROFILE_FEATURES))
+    inputs = np.concatenate([prev, context_features(remaining, elapsed, is_start), profile], axis=-1)
     return inputs, encode_targets(steps)
 
 

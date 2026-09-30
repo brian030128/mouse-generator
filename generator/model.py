@@ -19,18 +19,30 @@ from .data import INPUT_FEATURES, MIN_DT_MS
 
 LOG_2PI = math.log(2 * math.pi)
 MAX_DT_MS = 5000.0
-# Fixed log-spaced edges for the pause tail, merged with data quantiles.
-TAIL_EDGES_MS = (20, 30, 45, 65, 100, 150, 220, 330, 500, 750, 1100, 1700, 2500, 3600)
+# Fixed edges: a fine grid through the jitter regions either side of the
+# poll tick (a late poll lands at 5-6.7 ms, the catch-up at 8-12 ms) and a
+# log-spaced pause tail. Quantiles of the data add resolution on the tick
+# itself. Quantiles alone left one bin for everything below 6.5 ms, so a
+# sampled "late poll" came out anywhere from 0.5 to 6.5 ms.
+FIXED_EDGES_MS = tuple(np.round(np.arange(1.0, 7.01, 0.25), 2)) + \
+    tuple(np.round(np.arange(7.75, 12.01, 0.25), 2)) + (13, 14, 15, 16.5, 18) + \
+    (20, 23, 26, 30, 35, 45, 55, 65, 80, 100, 125, 150, 185, 220, 270, 330, 410, 500, 620,
+     750, 900, 1100, 1400, 1700, 2100, 2500, 3000, 3600, 4300)
 
 
-def make_dt_edges(dt_ms, bins=64):
-    """Bin edges in log dt: quantiles of the recorded gaps plus a fixed tail."""
+def make_dt_edges(dt_ms, bins=32):
+    """Bin edges in log dt: fixed jitter/tail grid plus data quantiles on the tick."""
     log_dt = np.log(np.asarray(dt_ms, dtype=np.float64))
     quantiles = np.quantile(log_dt, np.linspace(0, 1, bins + 1)[1:-1])
-    edges = np.concatenate([quantiles, np.log(TAIL_EDGES_MS)])
+    edges = np.concatenate([quantiles, np.log(FIXED_EDGES_MS)])
     edges = np.unique(np.round(edges, 4))
     edges = edges[(edges > math.log(MIN_DT_MS)) & (edges < math.log(MAX_DT_MS))]
-    return [float(v) for v in edges]      # inner edges; bins = len + 1
+    # Drop edges closer than 0.004 in log space (about 0.03 ms on the tick).
+    kept = [edges[0]]
+    for e in edges[1:]:
+        if e - kept[-1] >= 0.004:
+            kept.append(e)
+    return [float(v) for v in kept]      # inner edges; bins = len + 1
 
 
 class MouseModel(nn.Module):

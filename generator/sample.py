@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .data import PIXEL_SCALE, STEP_FEATURES, context_features, encode_step
+from .data import (DEFAULT_PROFILE, PIXEL_SCALE, PROFILE_FEATURES, STEP_FEATURES,
+                   context_features, encode_step, timing_profile)
 from .model import MouseModel
 
 
@@ -15,16 +16,32 @@ def load_model(path, device=None):
     model = MouseModel(**checkpoint["config"]).to(device)
     model.load_state_dict(checkpoint["model"])
     model.eval()
+    model.pooled_profile = np.array(checkpoint.get("pooled_profile", DEFAULT_PROFILE), np.float32)
+    model.session_profiles = {k: np.array(v, np.float32)
+                              for k, v in checkpoint.get("session_profiles", {}).items()}
     return model
+
+
+def profile_from_recording(db_path):
+    """Timing profile of a machine from a recording made on it (any length of
+    use; a few minutes of ordinary mouse work is enough)."""
+    from .data import load_segments
+    segments = load_segments(db_path)
+    profile = timing_profile(np.concatenate([s.steps[:-1, 2] for s in segments]))
+    if profile is None:
+        raise ValueError("recording has too few move events to measure a timing profile")
+    return profile
 
 
 @torch.no_grad()
 def generate_batch(model, starts, targets, temperature=0.8, dt_temperature=1.0,
-                   click_temperature=1.0, max_steps=600, seed=None, device=None):
+                   click_temperature=1.0, max_steps=600, seed=None, device=None, profile=None):
     """Sample one trajectory per (start, target) pair.
 
     temperature scales the step-displacement mixture, dt_temperature the time
-    gap distribution and click_temperature the click decision.
+    gap distribution and click_temperature the click decision. profile is the
+    timing profile to reproduce: one (PROFILE_FEATURES,) vector for all, or
+    one per pair; default is the pooled training profile.
 
     Returns a list of float arrays with columns (t_ms, x, y, click); each begins
     at the start position at t=0 and ends with the click step. A trajectory
@@ -34,6 +51,10 @@ def generate_batch(model, starts, targets, temperature=0.8, dt_temperature=1.0,
     starts = np.asarray(starts, dtype=np.float32).reshape(-1, 2)
     targets = np.asarray(targets, dtype=np.float32).reshape(-1, 2)
     batch = len(starts)
+    if profile is None:
+        profile = getattr(model, "pooled_profile", DEFAULT_PROFILE)
+    profile = np.broadcast_to(np.asarray(profile, np.float32).reshape(-1, PROFILE_FEATURES),
+                              (batch, PROFILE_FEATURES))
     generator = None
     if seed is not None:
         generator = torch.Generator(device=device).manual_seed(seed)
@@ -48,7 +69,7 @@ def generate_batch(model, starts, targets, temperature=0.8, dt_temperature=1.0,
     for step in range(max_steps):
         is_start = np.full(batch, 1.0 if step == 0 else 0.0, np.float32)
         context = context_features(targets - position, elapsed, is_start)
-        inputs = torch.from_numpy(np.concatenate([prev, context], -1)).to(device)[:, None, :]
+        inputs = torch.from_numpy(np.concatenate([prev, context, profile], -1)).to(device)[:, None, :]
         h, state = model(inputs, state)
         dx, dy, log_dt, click = model.sample_step(h[:, 0], temperature, dt_temperature,
                                                   click_temperature, generator)

@@ -177,6 +177,16 @@ where you ask and decides on its own when to press the button. Events keep the
 recorder's native timing, so a replay can move the cursor at the sampled times
 and click on the final row.
 
+Poll-timing jitter (how far gaps stray from the 7.5 ms tick) is a signature of
+the machine and session, so every step is also conditioned on a **timing
+profile**: the histogram of a session's sub-20 ms gaps over ten bands. In
+training each segment carries its own session's profile, so the model learns to
+reproduce whichever jitter it is given rather than a blend of all sessions. At
+generation time pass the profile of the machine that will replay the paths:
+`--calibrate recording.sqlite3` measures it from a recording made there (a few
+minutes of ordinary mouse use), `--profile-session ID` reuses a training
+session's, and the default is the pooled training profile.
+
 **DMTG (`models/mouse_dmtg.pt`).** A reimplementation of *DMTG: A Human-Like
 Mouse Trajectory Generation Bot Based on Entropy-Controlled Diffusion Networks*
 (Liu et al., arXiv:2410.18233): a 1D U-Net denoiser over a fixed-length
@@ -236,17 +246,21 @@ the figures `models/comparison/trajectories.png` and
 On 3,000 held-out segments from six recording sessions the models never saw
 (medians; GRU at temperature 0.8, DMTG at its default settings):
 
-| | real | GRU | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
-| --- | --- | --- | --- | --- | --- |
-| events per segment | 21 | 21 | 44 | 24 | 24 |
-| duration, ms | 210 | 259 | 333 | 187 | 185 |
-| path length / displacement | 1.16 | 1.17 | 1.36 | 1.04 | 1.25 |
-| peak speed, px/ms | 1.37 | 1.25 | 1.23 | 0.83 | 1.52 |
-| duration for 150–300 px moves, ms | 795 | 806 | 648 | 414 | 447 |
-| duration for 600–1200 px moves, ms | 1553 | 1946 | 1547 | 922 | 846 |
-| click lands on target | always | 99.4% of samples | pinned | pinned | pinned |
-| detector accuracy, all features | | 76.9% | 98.0% | 99.2% | 98.9% |
-| detector accuracy, shape only | | 61.9% | 88.1% | 96.3% | 88.6% |
+| | real | GRU, calibrated | GRU, blended | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
+| --- | --- | --- | --- | --- | --- | --- |
+| events per segment | 21 | 21 | 22 | 44 | 24 | 24 |
+| duration, ms | 210 | 223 | 304 | 333 | 184 | 185 |
+| path length / displacement | 1.16 | 1.20 | 1.19 | 1.36 | 1.04 | 1.25 |
+| peak speed, px/ms | 1.37 | 1.27 | 1.09 | 1.23 | 0.83 | 1.52 |
+| duration for 150–300 px moves, ms | 795 | 528 | 778 | 648 | 440 | 447 |
+| duration for 600–1200 px moves, ms | 1553 | 1845 | 1895 | 1547 | 874 | 846 |
+| click lands on target | always | 99.5% of samples | 99.4% | pinned | pinned | pinned |
+| detector accuracy, all features | | 71.2% | 77.2% | 98.0% | 99.3% | 98.9% |
+| detector accuracy, shape only | | 64.2% | 64.0% | 88.1% | 96.5% | 88.6% |
+
+"Calibrated" gives the GRU each held-out session's own timing profile, as a
+deployment would calibrate to its machine; "blended" gives it the pooled
+training profile.
 
 The detector is a 300-tree random forest scored by 5-fold cross-validation on
 the 3,000 real and 3,000 generated trajectories, using the path resampled to
@@ -255,14 +269,21 @@ the 3,000 real and 3,000 generated trajectories, using the path resampled to
 The forest is explainable: a depth-3 decision tree reaches 69% against the
 GRU and 93% against DMTG with a handful of rules.
 
-- **GRU.** The main tell is poll-timing jitter. 66% of real trajectories
-  contain a gap of 4.5–6.7 ms (an event delivered late, usually followed by an
-  8–12 ms gap), but only 39% of GRU trajectories do. Most of that is a
-  difference between sessions rather than a model error: such gaps make up
-  3.1% of gaps in the training sessions and 6.1% in the held-out ones, and the
-  GRU produces 3.4%. On training-session segments the detector drops to 71%.
-  The weaker shape tells are a slightly higher overshoot rate past the target
-  and a shorter final approach.
+- **GRU.** With calibration the poll-jitter tell is largely gone: a
+  detector given only the gap histogram falls from about 80% to 61%, and no
+  gap band is among the full detector's top features. Two things fixed it.
+  Jitter is a per-machine signature (4.5–6.7 ms gaps are 3.1% of gaps in the
+  training sessions and 6.1% in the held-out ones), so the model is now told
+  which signature to reproduce. And the earlier gap bins were quantiles of
+  the data, which put 55 bins on the 7.5 ms tick and one bin on everything
+  below 6.5 ms, so a correctly chosen "late poll" was drawn anywhere from 0.5
+  to 6.5 ms; the bins now have 0.25 ms resolution through both jitter
+  regions. Without calibration the same model is detected 77% of the time,
+  led by the jitter bands. What remains (71% overall, 64% on shape alone) is
+  motion dynamics rather than poll timing: real movements have larger
+  acceleration extremes (a big step right after a short gap) and slightly
+  fewer repeated positions, plus a slightly higher overshoot rate and faster
+  mid-range moves.
 - **DMTG.** Three rules catch it: no gap over 20 ms (real paths pause; a
   timing-free model re-timed at poll rate never does), a 20% share of
   zero-length steps versus 5% (a 64-point path re-timed at 7.5 ms ticks

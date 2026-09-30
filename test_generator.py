@@ -55,10 +55,32 @@ class DataTests(unittest.TestCase):
         segment = load_segments(self.path)[0]
         inputs, targets = segment_to_arrays(segment)
         self.assertEqual(inputs.shape, (10, INPUT_FEATURES))
-        self.assertEqual(inputs[0, -1], 1.0)                 # start flag
-        self.assertTrue((inputs[1:, -1] == 0).all())
+        flag = 4 + 8                                          # start flag column
+        self.assertEqual(inputs[0, flag], 1.0)
+        self.assertTrue((inputs[1:, flag] == 0).all())
         np.testing.assert_allclose(inputs[0, 4:6] * 500, [46, 28], atol=1e-3)
         self.assertEqual(targets[-1, 3], 1.0)
+
+    def test_timing_profiles(self):
+        from generator.data import (PROFILE_FEATURES, assign_profiles, session_profiles,
+                                    timing_profile)
+        segments = load_segments(self.path)
+        self.assertIsNone(timing_profile([7.5] * 10))               # too few gaps
+        profile = timing_profile([7.5] * 40 + [6.5] * 10 + [50.0] * 10)
+        self.assertEqual(profile.shape, (PROFILE_FEATURES,))
+        self.assertAlmostEqual(float(profile.sum()), 1.0, places=5)
+        self.assertAlmostEqual(float(profile[2]), 0.2, places=5)    # 6.5 ms band
+        profiles = session_profiles(segments)
+        self.assertEqual(set(profiles), {1, 2})
+        self.assertAlmostEqual(float(profiles[1][7]), 1.0)          # every gap is 8 ms
+        assign_profiles(segments, {}, profile)
+        inputs, _ = segment_to_arrays(segments[0])
+        np.testing.assert_allclose(inputs[:, -PROFILE_FEATURES:], np.broadcast_to(profile, (10, PROFILE_FEATURES)))
+        from generator.data import assign_local_profiles
+        assign_local_profiles(segments, profile, np.random.default_rng(0), minimum=20)
+        for s in segments:
+            self.assertAlmostEqual(float(s.profile.sum()), 1.0, places=5)
+            self.assertAlmostEqual(float(s.profile[7]), 1.0)        # every gap is 8 ms
 
     def test_model_trains_and_samples(self):
         segments = load_segments(self.path)

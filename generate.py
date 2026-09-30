@@ -37,6 +37,10 @@ def main():
                         help="DMTG complexity: path length / displacement - 1 (default: sampled)")
     parser.add_argument("--temperature", type=float, default=0.8,
                         help="lower is smoother and more typical; 1.0 samples the learned distribution")
+    parser.add_argument("--calibrate", metavar="RECORDING.sqlite3",
+                        help="GRU: reproduce the poll-timing jitter of a recording made on the target machine")
+    parser.add_argument("--profile-session", type=int, metavar="ID",
+                        help="GRU: reproduce the timing of one training session (default: pooled)")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--plot", help="save a PNG of the path")
@@ -57,9 +61,15 @@ def main():
         rows = generate_dmtg(model, [(args.x0, args.y0)], [(args.x1, args.y1)], alpha=args.alpha,
                              seed=args.seed, tick_quantiles=[7.5])[0]
     else:
+        from generator.sample import profile_from_recording
         model = load_model(args.model or default_checkpoint())
+        profile = None
+        if args.calibrate:
+            profile = profile_from_recording(args.calibrate)
+        elif args.profile_session is not None:
+            profile = model.session_profiles[args.profile_session]
         rows = generate(model, (args.x0, args.y0), (args.x1, args.y1),
-                        temperature=args.temperature, seed=args.seed)
+                        temperature=args.temperature, seed=args.seed, profile=profile)
     if args.json:
         print(json.dumps([[round(float(t), 2), int(x), int(y), int(c)] for t, x, y, c in rows]))
     else:

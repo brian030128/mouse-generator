@@ -270,13 +270,21 @@ def main():
 
     generated = {}
     if args.gru and Path(args.gru).exists():
+        from .data import session_profiles
         from .sample import generate_batch, load_model
         model = load_model(args.gru)
-        rows = []
-        for i in range(0, len(val), 512):
-            rows.extend(generate_batch(model, starts[i:i + 512], targets[i:i + 512],
-                                       temperature=args.temperature, seed=args.seed + i))
-        generated["gru"] = rows
+        # "gru": timing profile calibrated to each held-out segment's session,
+        # as a deployment would calibrate to its machine. "gru_blend": the
+        # pooled training profile, i.e. no calibration.
+        held_out_profiles = session_profiles(val)
+        profiles = np.stack([held_out_profiles.get(s.session_id, model.pooled_profile) for s in val])
+        for name, prof in (("gru", profiles), ("gru_blend", model.pooled_profile)):
+            rows = []
+            for i in range(0, len(val), 512):
+                p = prof[i:i + 512] if prof.ndim == 2 else prof
+                rows.extend(generate_batch(model, starts[i:i + 512], targets[i:i + 512],
+                                           temperature=args.temperature, seed=args.seed + i, profile=p))
+            generated[name] = rows
     if args.dmtg and Path(args.dmtg).exists():
         from .diffusion import generate_dmtg, load_dmtg
         model = load_dmtg(args.dmtg)

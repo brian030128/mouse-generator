@@ -12,7 +12,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .data import BucketSampler, StepDataset, collate, load_segments, split_by_session
+from .data import (BucketSampler, StepDataset, assign_local_profiles, collate, load_segments,
+                   session_profiles, split_by_session, timing_profile)
 from .model import MouseModel, make_dt_edges
 
 
@@ -58,6 +59,14 @@ def main():
     segments = load_segments(args.db)
     train_segments, val_segments = split_by_session(segments, args.holdout, args.seed)
     print(f"segments: {len(segments)} total, {len(train_segments)} train, {len(val_segments)} val")
+    # Each segment is conditioned on a timing profile measured from a window
+    # of its own session; the pooled training profile is the fallback.
+    profiles = session_profiles(train_segments)
+    pooled = timing_profile(np.concatenate([s.steps[:-1, 2] for s in train_segments]))
+    rng = np.random.default_rng(args.seed)
+    assign_local_profiles(train_segments, pooled, rng)
+    assign_local_profiles(val_segments, pooled, rng)
+    print(f"timing profiles: {len(profiles)} training sessions, local windows per segment")
     train_set, val_set = StepDataset(train_segments), StepDataset(val_segments)
     print(f"steps: {sum(train_set.lengths)} train, {sum(val_set.lengths)} val")
 
@@ -112,7 +121,10 @@ def main():
         if val_loss < best:
             best = val_loss
             torch.save({"model": model.state_dict(), "config": model.config,
-                        "epoch": epoch, "val_loss": val_loss}, out_path)
+                        "epoch": epoch, "val_loss": val_loss,
+                        "pooled_profile": pooled.tolist(),
+                        "session_profiles": {int(k): v.tolist() for k, v in profiles.items()}},
+                       out_path)
     with open(out_path.with_suffix(".history.json"), "w", encoding="utf-8") as handle:
         json.dump(history, handle, indent=1)
     print(f"best val loss {best:.4f}; saved {out_path}")
