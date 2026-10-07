@@ -19,6 +19,9 @@ class MouseCapture:
         self.error = None
         self.thread_id = None
         self.thread = None
+        # Optional callable(timestamp_ns, x, y) run in the hook at each left
+        # press; it must only enqueue, since the hook has to return at once.
+        self.on_left_down = None
 
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -87,9 +90,11 @@ class MouseCapture:
                         if button == "x":
                             button = "x1" if high == 1 else "x2"
                         delta = ctypes.c_short(high).value if "wheel" in kind else 0
-                        self.events.put(MouseEvent(time.perf_counter_ns(),
-                                                   data.pt.x, data.pt.y,
+                        timestamp = time.perf_counter_ns()
+                        self.events.put(MouseEvent(timestamp, data.pt.x, data.pt.y,
                                                    kind, button, delta))
+                        if message == 0x0201 and self.on_left_down:
+                            self.on_left_down(timestamp, data.pt.x, data.pt.y)
                 return user32.CallNextHookEx(None, code, message, address)
 
             self.thread_id = kernel32.GetCurrentThreadId()

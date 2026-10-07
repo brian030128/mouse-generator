@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+TARGET_COLUMNS = (("target_left", "INTEGER"), ("target_top", "INTEGER"),
+                  ("target_width", "INTEGER"), ("target_height", "INTEGER"),
+                  ("target_control_type", "INTEGER"), ("target_delay_ms", "REAL"))
+
+
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -53,6 +58,9 @@ class Database:
         # Columns added after the first release; rows recorded earlier stay NULL.
         self._add_column("sessions", "platform", "TEXT")
         self._add_column("segments", "pixel_scale", "REAL")
+        # Bounding box and UI Automation control type of the clicked element.
+        for column, kind in TARGET_COLUMNS:
+            self._add_column("segments", column, kind)
 
     def _add_column(self, table, column, kind):
         columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
@@ -94,6 +102,17 @@ class Database:
                 [(result.lastrowid, i, e.timestamp_ns - start, e.x, e.y,
                   e.kind, e.button, e.wheel_delta) for i, e in enumerate(events)],
             )
+        return result.lastrowid
+
+    def set_target(self, segment_id, target):
+        """Record the clicked element's box and control type on a segment."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE segments SET target_left = ?, target_top = ?, target_width = ?, "
+                "target_height = ?, target_control_type = ?, target_delay_ms = ? WHERE id = ?",
+                (target.left, target.top, target.width, target.height,
+                 target.control_type, target.delay_ms, segment_id),
+            )
 
     def export_csv(self, path):
         if Path(path).resolve() in {
@@ -103,7 +122,9 @@ class Database:
         cursor = self.connection.execute("""
             SELECT s.session_id, s.id AS segment_id, s.start_offset_ns,
                    s.duration_ns, e.sequence, e.t_ns, e.x, e.y,
-                   e.kind, e.button, e.wheel_delta, ss.platform, s.pixel_scale
+                   e.kind, e.button, e.wheel_delta, ss.platform, s.pixel_scale,
+                   s.target_left, s.target_top, s.target_width, s.target_height,
+                   s.target_control_type
             FROM segments s JOIN events e ON e.segment_id = s.id
             JOIN sessions ss ON ss.id = s.session_id
             ORDER BY s.id, e.sequence

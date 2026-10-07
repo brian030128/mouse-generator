@@ -11,6 +11,7 @@ from tkinter import messagebox, ttk
 from capture import SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at
 from segments import MAX_DURATION_NS, SegmentCollector
 from storage import Database
+import targets
 
 MACOS = sys.platform == "darwin"
 SYSTEM_NAME = "macOS" if MACOS else "Windows"
@@ -25,6 +26,8 @@ class RecorderApp:
         self.capture = None
         self.collector = None
         self.session_id = None
+        self.probe = None
+        self.ledger = targets.TargetLedger()
         if startup is None:
             from startup import StartupRegistration
             startup = StartupRegistration(__file__, path)
@@ -87,6 +90,10 @@ class RecorderApp:
             self.collector = SegmentCollector(self.save)
             self.update_counts()
             self.capture = MouseCapture()
+            if targets.SUPPORTED:
+                self.probe = targets.TargetProbe()
+                self.probe.start()
+                self.capture.on_left_down = self.probe.request
             self.capture.start()
             self.status.set("Recording — close the window to stop")
         except Exception as error:
@@ -95,10 +102,27 @@ class RecorderApp:
 
     def save(self, events):
         first = events[0]
-        self.database.save_segment(self.session_id, self.recording_start_ns, events,
-                                   pixel_scale_at(first.x, first.y))
+        segment_id = self.database.save_segment(self.session_id, self.recording_start_ns, events,
+                                                pixel_scale_at(first.x, first.y))
+        # The segment ends at its left press; its target lookup may still be running.
+        self.write_targets(self.ledger.segment_saved(events[-1].timestamp_ns, segment_id))
         self.total_segments += 1
         self.update_total()
+
+    def collect_targets(self):
+        if not self.probe:
+            return
+        while True:
+            try:
+                timestamp_ns, target = self.probe.results.get_nowait()
+            except queue.Empty:
+                break
+            self.write_targets(self.ledger.result(timestamp_ns, target))
+        self.ledger.expire(time.perf_counter_ns())
+
+    def write_targets(self, ready):
+        for segment_id, target in ready:
+            self.database.set_target(segment_id, target)
 
     def update_total(self):
         self.total.set(f"Total saved segments: {self.total_segments:,}")
@@ -120,6 +144,7 @@ class RecorderApp:
                 if self.capture.error or not self.capture.thread.is_alive():
                     raise RuntimeError(self.capture.error or "Mouse capture stopped unexpectedly.")
                 self.drain(limit=2000)
+                self.collect_targets()
                 self.update_counts()
         except Exception as error:
             self.stop(flush=False)
@@ -143,6 +168,14 @@ class RecorderApp:
                 errors.append(str(error))
             finally:
                 self.capture = None
+        if self.probe:
+            # Let queued lookups finish so the last segments get their targets.
+            self.probe.stop()
+            try:
+                self.collect_targets()
+            except Exception as error:
+                errors.append(str(error))
+            self.probe = None
         if self.collector:
             self.collector.finish()
             self.update_counts()

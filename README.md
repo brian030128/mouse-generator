@@ -98,7 +98,7 @@ labels are empty. Existing recordings are preserved.
 | Table | Contents |
 | --- | --- |
 | `sessions` | UTC start/end, label, duration limit, virtual desktop bounds, platform |
-| `segments` | Session ID, start offset, duration, event count, pixel scale |
+| `segments` | Session ID, start offset, duration, event count, pixel scale, clicked element's box and type (Windows) |
 | `events` | Segment ID, sequence, relative timestamp, x/y, event kind, button, wheel delta |
 
 On Windows, positions are physical screen pixels. On macOS they are global
@@ -127,6 +127,35 @@ It does not upload data. Capture applies to the normal interactive desktop;
 Windows secure desktop events are not captured. Keep monitor layout and scaling
 unchanged during a run; restart the app after changing them.
 
+## Clicked target size (Windows)
+
+How a movement ends depends on how big its target is, so on Windows the
+recorder also notes what each segment's closing left-click landed on. At the
+press, the hook queues the click point and a worker thread asks UI
+Automation, the accessibility interface screen readers use, which element is
+there. The segment gets six columns: `target_left`, `target_top`,
+`target_width`, `target_height` (physical pixels, like the events),
+`target_control_type` (a UI Automation control type id, such as 50000 for a
+button, 50005 for a link or 50019 for a tab; `targets.CONTROL_TYPES` names
+them) and `target_delay_ms`, the time from the press to the finished lookup,
+typically 1–15 ms.
+
+Only the box and the numeric type are stored. Element names, values and
+window titles are never read, so no on-screen text reaches the database.
+
+Coverage depends on the application. Native Windows apps, Explorer, the
+Windows 11 taskbar, Office, and Chromium-based browsers and Electron apps
+report real controls. Games, canvas-heavy pages and remote desktops report
+only a surrounding container (types pane, window, document, group or custom;
+`targets.CONTAINER_TYPES`), which should be treated as an unknown size.
+Chromium builds its accessibility tree when the recorder first asks, so the
+first click in a browser after the recorder starts may resolve only to the
+whole page, and the browser keeps that tree up to date while the recorder
+runs, at a small cost in browser CPU and memory. Lookups for a press are
+skipped if the worker falls more than half a second behind, and the columns
+stay empty when a lookup fails, on macOS, and for segments recorded before
+this feature.
+
 Choose a different database or export without opening the interface:
 
 ```powershell
@@ -136,7 +165,7 @@ python -m unittest -v
 ```
 
 CSV rows include session and segment IDs so separate trajectories stay distinct,
-plus each segment's `platform` and `pixel_scale`. The export contains every stored
+plus each segment's `platform`, `pixel_scale` and clicked target box and type. The export contains every stored
 event; session labels and desktop bounds remain in SQLite. Close the recorder before copying its database, so SQLite can finish
 its WAL checkpoint.
 
