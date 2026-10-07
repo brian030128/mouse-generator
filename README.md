@@ -156,3 +156,174 @@ depends on events per segment and stored values. As a rough planning estimate:
 Segment estimates extrapolate the benchmark; allow additional disk space for
 SQLite's active WAL file and any CSV exports. A segment is a whole movement
 ending in a click, while an event is one position or button/wheel update.
+
+## Trajectory generator
+
+`generator/` trains a model on the recorded segments and samples new
+movement-to-click paths between any two screen points. It needs PyTorch and
+NumPy (matplotlib only for the plots); a CUDA GPU makes training fast but is
+not required for sampling.
+
+Two generators are included.
+
+**GRU (default, `models/mouse_gru.pt`).** A 3-layer GRU (5.5M parameters)
+emits one mouse event at a time: a click probability, then the time gap as a
+categorical over about 100 fine bins of the recorded gap distribution (most
+gaps sit within 0.3 ms of the 7.5 ms poll interval, with jitter and pauses in
+the tails), then the integer step as mixtures of discretised logistics over
+dx and over dy given dx (PixelCNN++ style), conditioned on that gap. An
+earlier Gaussian step head in the SketchRNN style could not be as peaked as
+the pixel lattice without losing the speed tail; the discrete head is exact
+on the lattice and keeps the tail through its mixture. The last third of
+training uses scheduled sampling, feeding the model some of its own sampled
+steps so free-running generation matches teacher-forced prediction. Every step is
+conditioned on the vector still to travel to the target, so a sampled path ends
+where you ask and decides on its own when to press the button. Events keep the
+recorder's native timing, so a replay can move the cursor at the sampled times
+and click on the final row.
+
+Poll-timing jitter (how far gaps stray from the 7.5 ms tick) is a signature of
+the machine and session, so every step is also conditioned on a **timing
+profile**: the histogram of a session's sub-20 ms gaps over ten bands. In
+training each segment carries its own session's profile, so the model learns to
+reproduce whichever jitter it is given rather than a blend of all sessions. At
+generation time pass the profile of the machine that will replay the paths:
+`--calibrate recording.sqlite3` measures it from a recording made there (a few
+minutes of ordinary mouse use), `--profile-session ID` reuses a training
+session's, and the default is the pooled training profile.
+
+**DMTG (`models/mouse_dmtg.pt`).** A reimplementation of *DMTG: A Human-Like
+Mouse Trajectory Generation Bot Based on Entropy-Controlled Diffusion Networks*
+(Liu et al., arXiv:2410.18233): a 1D U-Net denoiser over a fixed-length
+sequence of 64 coordinates, conditioned on the end point and a complexity
+factor alpha (path length over displacement), trained with the diffusion loss
+plus an x0 reconstruction term and the paper's path-length style term, and
+sampled with DDIM from the paper's mixture-of-Gaussians initial noise. The
+paper generates coordinates only and leaves several hyperparameters
+unspecified; `generator/diffusion.py` documents each choice made here. A small
+head predicts the movement duration and the path is re-timed at recorded poll
+gaps so that its output can be replayed and compared.
+
+**BeCAPTCHA-Mouse (`generator/becaptcha.py`).** The two bot generators from
+*BeCAPTCHA-Mouse: Synthetic Mouse Trajectories and Improved Bot Detection*
+(Acien et al., arXiv:2005.00890), included as baselines. The function-based
+generator crosses a path shape (linear, quadratic, exponential) with a
+velocity profile (constant, accelerating, bell-shaped), drawing the point
+count and curvature from the human recordings. The GAN is the paper's LSTM
+generator and discriminator trained with its settings; since it is
+unconditional, it is trained in a start-to-end frame and each sample is
+rotated and scaled onto the requested points. Both use recorded poll gaps for
+timing, which the paper (200 Hz data) does not model.
+
+```powershell
+python -m generator.train --db data/mouse.sqlite3 --epochs 100      # GRU, ~20 min on an RTX 4060
+python -m generator.diffusion --db data/mouse.sqlite3 --epochs 150  # DMTG, ~25 min
+python -m generator.becaptcha --db data/mouse.sqlite3               # BeCAPTCHA GAN, ~3 min
+python -m generator.evaluate --db data/mouse.sqlite3                # held-out comparison + plots
+python generate.py 400 300 1200 700                                 # one GRU path, printed
+python generate.py 400 300 1200 700 --json                          # for another program
+python generate.py 400 300 1200 700 --dmtg --plot path.png          # DMTG path with a picture
+python -m unittest test_generator -v
+```
+
+From Python:
+
+```python
+from generator.sample import load_model, generate, default_checkpoint
+model = load_model(default_checkpoint())
+rows = generate(model, (400, 300), (1200, 700))   # columns: t_ms, x, y, click
+```
+
+Training holds out whole recording sessions (about 10% of segments) and keeps
+the checkpoint with the best held-out loss. `--temperature` scales the GRU's
+step-displacement mixture: 1.0 samples the learned distribution exactly, lower
+values give smoother, more typical paths.
+
+### How the generators compare
+
+`generator.evaluate` asks each model to travel the same start-to-click vector
+as each held-out real segment, compares summary statistics, and trains a random
+forest to tell real from generated (the white-box test in the DMTG paper; 50%
+means indistinguishable). Results are in `models/comparison/report.json` and
+the figures `models/comparison/trajectories.png` and
+`models/comparison/speed_profile.png`.
+
+On 3,000 held-out segments from recording sessions the models never saw
+(68,535 segments recorded in total; medians; GRU at temperature 0.8, DMTG at
+its default settings):
+
+| | real | GRU, calibrated | GRU, blended | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
+| --- | --- | --- | --- | --- | --- | --- |
+| events per segment | 62 | 54 | 54 | 87 | 57 | 55 |
+| duration, ms | 871 | 805 | 776 | 660 | 437 | 427 |
+| path length / displacement | 1.15 | 1.10 | 1.10 | 1.23 | 1.03 | 1.29 |
+| peak speed, px/ms | 2.66 | 2.22 | 2.13 | 1.95 | 1.77 | 3.43 |
+| duration for 150–300 px moves, ms | 961 | 816 | 750 | 613 | 443 | 459 |
+| duration for 600–1200 px moves, ms | 1366 | 1571 | 1571 | 1476 | 859 | 889 |
+| click lands on target | always | 100.0% of samples | 99.9% | pinned | pinned | pinned |
+| detector F1, all features | | 65.4% | 67.5% | 99.4% | 99.3% | 99.5% |
+| detector AUC, all features | | 0.707 | 0.734 | 1.000 | 1.000 | 1.000 |
+| detector F1, shape only | | 60.1% | 61.7% | 91.9% | 98.4% | 91.6% |
+
+The held-out sessions change as recording continues, so compare models on the
+same run of the script, not across README revisions. On one identical
+held-out sample, the integer step head cut detection sharply against the
+previous Gaussian step head:
+
+| | real | Gaussian step | integer step |
+| --- | --- | --- | --- |
+| acceleration, 99th percentile | 128 | 58 | 127 |
+| zero-length steps | 1.9% | 3.6% | 2.6% |
+| 1-pixel steps | 19.6% | 26.4% | 23.9% |
+| sharp turns (> 1 rad) | 9.1% | 12.8% | 9.1% |
+| detector F1, all features | | 73.8% | 64.5% |
+| detector AUC, all features | | 0.822 | 0.698 |
+| detector F1, shape only | | 68.2% | 59.5% |
+
+"Calibrated" gives the GRU each held-out session's own timing profile, as a
+deployment would calibrate to its machine; "blended" gives it the pooled
+training profile.
+
+The detector is a 300-tree random forest scored by 5-fold cross-validation on
+the 3,000 real and 3,000 generated trajectories, using the path resampled to
+24 points in a start-to-click frame, a histogram of time gaps around the
+7.5 ms poll interval, and speed, acceleration, turning and duration summaries.
+The forest is explainable: a depth-3 decision tree reaches 93% against DMTG
+with a handful of rules.
+
+- **GRU.** With calibration the poll-jitter tell is largely gone: a
+  detector given only the gap histogram falls from about 80% to 61%, and no
+  gap band is among the full detector's top features. Two things fixed it.
+  Jitter is a per-machine signature (4.5–6.7 ms gaps are 3.1% of gaps in the
+  training sessions and 6.1% in the held-out ones), so the model is now told
+  which signature to reproduce. And the earlier gap bins were quantiles of
+  the data, which put 55 bins on the 7.5 ms tick and one bin on everything
+  below 6.5 ms, so a correctly chosen "late poll" was drawn anywhere from 0.5
+  to 6.5 ms; the bins now have 0.25 ms resolution through both jitter
+  regions. The integer step head then fixed the motion tells the Gaussian
+  head left behind. A Gaussian step had to choose between heading wobble and
+  speed extremes; the discrete head matches real acceleration extremes and
+  sharp-turn rates exactly. What remains is small and diffuse: slightly more
+  repeated and 1-pixel positions, paths a little straighter than real, and
+  mid-range moves a little faster. No single feature carries more than 4%
+  of the detector's importance.
+- **DMTG.** Three rules catch it: no gap over 20 ms (real paths pause; a
+  timing-free model re-timed at poll rate never does), a 20% share of
+  zero-length steps versus 5% (a 64-point path re-timed at 7.5 ms ticks
+  repeats positions on short moves), and near-reversal heading changes from
+  residual denoising noise. The paper itself reports 87–91% detection against
+  strong classifiers.
+- **BeCAPTCHA-Mouse.** Both baselines are caught almost every time, as in
+  the paper (98–99% with its neuromotor detector). The function-based paths
+  are too clean: no pauses, nearly straight (path/displacement 1.04), and
+  a velocity profile that is either flat, still accelerating at the click
+  (peak at 66% of the movement), or a symmetric bell. The GAN learns
+  plausible shapes (shape-only detection 88.6%, on par with DMTG) but, like
+  DMTG, has no timing of its own; both baselines also finish long moves in
+  about half the real time because the human point count they draw from
+  excludes the pauses inside real segments.
+
+Use the GRU for replay; DMTG is kept for comparison and as a base for further
+work. Because jitter is per machine, recording a short session on the machine
+that will replay the paths and matching its gap distribution is the most
+direct way to lower the GRU's detectability.
