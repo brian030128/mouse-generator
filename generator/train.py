@@ -12,9 +12,31 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .data import (BucketSampler, StepDataset, assign_local_profiles, collate, load_segments,
-                   session_profiles, split_by_session, timing_profile)
+from .data import (MIN_DT_MS, PIXEL_SCALE, STEP_FEATURES, BucketSampler, StepDataset,
+                   assign_local_profiles, collate, load_segments, session_profiles,
+                   split_by_session, timing_profile)
 from .model import MouseModel, make_dt_edges
+
+
+def mix_in_sampled_steps(model, inputs, mask, prob):
+    """Two-pass scheduled sampling: replace the previous-step features of a
+    random subset of positions with a step sampled from the model's own
+    teacher-forced prediction at the preceding position."""
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        h, _ = model(inputs)
+        dx, dy, log_dt, click = model.sample_step(h, temperature=1.0)
+        dx_px, dy_px = dx * PIXEL_SCALE, dy * PIXEL_SCALE
+        dt_ms = torch.exp(log_dt).clamp(MIN_DT_MS, 5000.0)
+        sampled = torch.stack([torch.asinh(dx_px / PIXEL_SCALE), torch.asinh(dy_px / PIXEL_SCALE),
+                               torch.log(dt_ms) / 3.0, click.float()], -1)
+        choose = (torch.rand(mask.shape, device=inputs.device) < prob) & mask.bool()
+        choose[:, 0] = False
+        mixed = inputs.clone()
+        mixed[:, 1:, :STEP_FEATURES] = torch.where(choose[:, 1:, None], sampled[:, :-1], inputs[:, 1:, :STEP_FEATURES])
+    model.train(was_training)
+    return mixed
 
 
 def evaluate(model, loader, device):
@@ -48,6 +70,10 @@ def main():
     parser.add_argument("--mixtures", type=int, default=20)
     parser.add_argument("--dt-bins", type=int, default=64, help="quantile bins for the time gap")
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--scheduled-sampling-fraction", type=float, default=0.3,
+                        help="fraction of epochs at the end that use scheduled sampling (0 disables)")
+    parser.add_argument("--scheduled-sampling-max", type=float, default=0.3,
+                        help="probability, reached at the last epoch, that an input step is the model's own sample")
     parser.add_argument("--holdout", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -100,10 +126,19 @@ def main():
         start = time.time()
         running = 0.0
         count = 0
+        # Scheduled sampling: in the final part of training, some inputs carry
+        # the model's own sampled previous step instead of the recorded one, so
+        # free-running generation behaves like teacher-forced prediction.
+        ss_start = args.epochs * (1 - args.scheduled_sampling_fraction)
+        ss_prob = 0.0
+        if args.scheduled_sampling_fraction > 0 and epoch > ss_start:
+            ss_prob = args.scheduled_sampling_max * (epoch - ss_start) / max(1, args.epochs - ss_start)
         for inputs, targets, mask in train_loader:
             for group in optimizer.param_groups:
                 group["lr"] = lr_at(update)
             inputs, targets, mask = inputs.to(device), targets.to(device), mask.to(device)
+            if ss_prob > 0:
+                inputs = mix_in_sampled_steps(model, inputs, mask, ss_prob)
             out, _ = model(inputs)
             loss, _ = model.loss(out, targets, mask)
             optimizer.zero_grad(set_to_none=True)

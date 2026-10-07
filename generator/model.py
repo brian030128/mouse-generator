@@ -5,7 +5,9 @@ Per step the head factorises the event as
 where dt is a categorical over fine bins of the recorded gap distribution
 (most gaps sit within 0.3 ms of the 7.5 ms poll interval, with jitter and
 pauses in the tails; a Gaussian mixture on log dt smears that structure) and
-(dx, dy) is a mixture of bivariate Gaussians as in SketchRNN.
+dx, then dy given dx, are mixtures of discretised logistics over integer
+pixels, as in PixelCNN++. An earlier Gaussian step head (SketchRNN style)
+could not be as peaked as the pixel lattice without losing the speed tail.
 """
 
 import math
@@ -15,9 +17,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .data import INPUT_FEATURES, MIN_DT_MS
+from .data import INPUT_FEATURES, MIN_DT_MS, PIXEL_SCALE
 
-LOG_2PI = math.log(2 * math.pi)
 MAX_DT_MS = 5000.0
 # Fixed edges: a fine grid through the jitter regions either side of the
 # poll tick (a late poll lands at 5-6.7 ms, the catch-up at 8-12 ms) and a
@@ -62,9 +63,16 @@ class MouseModel(nn.Module):
         self.dt_head = nn.Sequential(nn.Linear(hidden + 1, hidden // 2), nn.GELU(),
                                      nn.Linear(hidden // 2, self.dt_bins))
         self.dt_embedding = nn.Embedding(self.dt_bins, dt_embed)
-        # per mixture: logit, mu_x, mu_y, log_sx, log_sy, rho -> 6
-        self.xy_head = nn.Sequential(nn.Linear(hidden + 1 + dt_embed, hidden), nn.GELU(),
-                                     nn.Linear(hidden, mixtures * 6))
+        # Integer step heads: a mixture of discretised logistics over dx, then
+        # over dy given dx (PixelCNN++ style). The mouse delivers integer pixel
+        # deltas, and at slow speed those are a few lattice points; a
+        # categorical over the lattice can be as peaked as the data, where a
+        # rounded Gaussian had to choose between heading wobble and a missing
+        # speed tail. Per mixture: logit, mu, log_s -> 3.
+        self.dx_head = nn.Sequential(nn.Linear(hidden + 1 + dt_embed, hidden), nn.GELU(),
+                                     nn.Linear(hidden, mixtures * 3))
+        self.dy_head = nn.Sequential(nn.Linear(hidden + 1 + dt_embed + 2, hidden), nn.GELU(),
+                                     nn.Linear(hidden, mixtures * 3))
 
     def forward(self, inputs, state=None):
         h, state = self.rnn(self.embed(inputs), state)
@@ -74,14 +82,23 @@ class MouseModel(nn.Module):
     def dt_bin(self, log_dt):
         return torch.bucketize(log_dt.contiguous(), self.dt_edges)
 
-    def xy_params(self, h, click, dt_bin):
-        out = self.xy_head(torch.cat([h, click[..., None], self.dt_embedding(dt_bin)], -1))
-        params = out.reshape(*out.shape[:-1], self.mixtures, 6)
+    @staticmethod
+    def _dx_encoding(dx_px):
+        return torch.stack([torch.asinh(dx_px / 10.0), dx_px / 100.0], -1)
+
+    def step_params(self, head, features):
+        params = head(features).reshape(*features.shape[:-1], self.mixtures, 3)
         logit_pi = params[..., 0]
-        mu = params[..., 1:3]
-        log_s = params[..., 3:5].clamp(-7, 5)
-        rho = torch.tanh(params[..., 5]) * 0.99
-        return logit_pi, mu, log_s, rho
+        mu = params[..., 1] * STEP_UNIT                       # pixels
+        log_s = (params[..., 2] + math.log(STEP_UNIT)).clamp(LOG_S_MIN, LOG_S_MAX)
+        return logit_pi, mu, log_s
+
+    def dx_params(self, h, click, dt_bin):
+        return self.step_params(self.dx_head, torch.cat([h, click[..., None], self.dt_embedding(dt_bin)], -1))
+
+    def dy_params(self, h, click, dt_bin, dx_px):
+        return self.step_params(self.dy_head, torch.cat(
+            [h, click[..., None], self.dt_embedding(dt_bin), self._dx_encoding(dx_px)], -1))
 
     def dt_logits(self, h, click):
         return self.dt_head(torch.cat([h, click[..., None]], -1))
@@ -90,19 +107,16 @@ class MouseModel(nn.Module):
     def loss(self, h, targets, mask):
         click_t = targets[..., 3]
         dt_bin = self.dt_bin(targets[..., 2])
+        dx_px = torch.round(targets[..., 0] * PIXEL_SCALE)
+        dy_px = torch.round(targets[..., 1] * PIXEL_SCALE)
         click_logit = self.click_head(h).squeeze(-1)
         l_click = F.binary_cross_entropy_with_logits(click_logit, click_t, reduction="none")
         l_dt = F.cross_entropy(self.dt_logits(h, click_t).transpose(1, 2), dt_bin, reduction="none")
-        logit_pi, mu, log_s, rho = self.xy_params(h, click_t, dt_bin)
-        z = (targets[..., None, 0:2] - mu) / log_s.exp()
-        zx, zy = z[..., 0], z[..., 1]
-        one_m_rho2 = 1 - rho ** 2
-        log_xy = -(zx ** 2 + zy ** 2 - 2 * rho * zx * zy) / (2 * one_m_rho2) \
-            - log_s.sum(-1) - 0.5 * torch.log(one_m_rho2) - LOG_2PI
-        l_xy = -torch.logsumexp(F.log_softmax(logit_pi, -1) + log_xy, dim=-1)
+        l_dx = -discretised_logistic_mixture_log_prob(dx_px, *self.dx_params(h, click_t, dt_bin))
+        l_dy = -discretised_logistic_mixture_log_prob(dy_px, *self.dy_params(h, click_t, dt_bin, dx_px))
         denom = mask.sum().clamp(min=1)
         parts = {k: (v * mask).sum() / denom for k, v in
-                 (("nll_xy", l_xy), ("nll_dt", l_dt), ("click_bce", l_click))}
+                 (("nll_xy", l_dx + l_dy), ("nll_dt", l_dt), ("click_bce", l_click))}
         total = parts["nll_xy"] + parts["nll_dt"] + parts["click_bce"]
         return total, {k: v.item() for k, v in parts.items()}
 
@@ -121,22 +135,43 @@ class MouseModel(nn.Module):
         hi = torch.cat([self.dt_edges, torch.full((1,), math.log(MAX_DT_MS), device=h.device)])[dt_bin]
         log_dt = lo + (hi - lo) * torch.rand(lo.shape, device=h.device, generator=generator)
 
-        tau = max(temperature, 1e-3)
-        logit_pi, mu, log_s, rho = self.xy_params(h, click_f, dt_bin)
-        pi = F.softmax(logit_pi / tau, -1)
-        comp = torch.multinomial(pi.reshape(-1, self.mixtures), 1, generator=generator)
-        comp = comp.reshape(*pi.shape[:-1], 1)
+        dx_px = sample_discretised_logistic_mixture(*self.dx_params(h, click_f, dt_bin), temperature, generator)
+        dy_px = sample_discretised_logistic_mixture(*self.dy_params(h, click_f, dt_bin, dx_px), temperature, generator)
+        return dx_px / PIXEL_SCALE, dy_px / PIXEL_SCALE, log_dt, click
 
-        def pick(v):
-            return v.gather(-1, comp).squeeze(-1)
 
-        def noise():
-            return torch.randn(comp.shape[:-1], device=h.device, generator=generator)
+# ----------------------------------------------------------------------------
+# discretised logistic mixture over integers (Salimans et al., PixelCNN++)
+# ----------------------------------------------------------------------------
 
-        sx = pick(log_s[..., 0]).exp() * math.sqrt(tau)
-        sy = pick(log_s[..., 1]).exp() * math.sqrt(tau)
-        r = pick(rho)
-        e1, e2 = noise(), noise()
-        dx = pick(mu[..., 0]) + sx * e1
-        dy = pick(mu[..., 1]) + sy * (r * e1 + torch.sqrt(1 - r ** 2) * e2)
-        return dx, dy, log_dt, click
+STEP_UNIT = 10.0          # network outputs mu and log s in units of 10 px
+LOG_S_MIN = math.log(0.03)  # a scale this small puts ~all mass on one integer
+LOG_S_MAX = math.log(500.0)
+MAX_STEP_PX = 3000.0
+
+
+def discretised_logistic_mixture_log_prob(x, logit_pi, mu, log_s):
+    """log p(x) for integer x (...,) under a mixture with params (..., K)."""
+    x = x[..., None]
+    inv_s = torch.exp(-log_s)
+    plus = (x + 0.5 - mu) * inv_s
+    minus = (x - 0.5 - mu) * inv_s
+    cdf_delta = torch.sigmoid(plus) - torch.sigmoid(minus)
+    # Where the bin's mass underflows, use the density at the bin centre.
+    mid = (x - mu) * inv_s
+    log_pdf_mid = mid - log_s - 2.0 * F.softplus(mid)
+    log_prob = torch.where(cdf_delta > 1e-5, torch.log(cdf_delta.clamp(min=1e-12)), log_pdf_mid)
+    return torch.logsumexp(F.log_softmax(logit_pi, -1) + log_prob, dim=-1)
+
+
+def sample_discretised_logistic_mixture(logit_pi, mu, log_s, temperature=1.0, generator=None):
+    """Sample integers (...,) from mixture params (..., K)."""
+    tau = max(temperature, 1e-3)
+    k = logit_pi.shape[-1]
+    pi = F.softmax(logit_pi / tau, -1)
+    comp = torch.multinomial(pi.reshape(-1, k), 1, generator=generator).reshape(*pi.shape[:-1], 1)
+    mu_c = mu.gather(-1, comp).squeeze(-1)
+    s_c = log_s.gather(-1, comp).squeeze(-1).exp() * tau
+    u = torch.rand(mu_c.shape, device=mu.device, generator=generator).clamp(1e-5, 1 - 1e-5)
+    x = mu_c + s_c * (torch.log(u) - torch.log1p(-u))
+    return torch.round(x).clamp(-MAX_STEP_PX, MAX_STEP_PX)

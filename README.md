@@ -166,12 +166,17 @@ not required for sampling.
 
 Two generators are included.
 
-**GRU (default, `models/mouse_gru.pt`).** A 3-layer GRU (5.2M parameters)
-emits one mouse event at a time, in the style of SketchRNN: a click
-probability, then the time gap as a categorical over 78 fine bins of the
-recorded gap distribution (most gaps sit within 0.3 ms of the 7.5 ms poll
-interval, with jitter and pauses in the tails), then the step displacement as a
-mixture of bivariate Gaussians conditioned on that gap. Every step is
+**GRU (default, `models/mouse_gru.pt`).** A 3-layer GRU (5.5M parameters)
+emits one mouse event at a time: a click probability, then the time gap as a
+categorical over about 100 fine bins of the recorded gap distribution (most
+gaps sit within 0.3 ms of the 7.5 ms poll interval, with jitter and pauses in
+the tails), then the integer step as mixtures of discretised logistics over
+dx and over dy given dx (PixelCNN++ style), conditioned on that gap. An
+earlier Gaussian step head in the SketchRNN style could not be as peaked as
+the pixel lattice without losing the speed tail; the discrete head is exact
+on the lattice and keeps the tail through its mixture. The last third of
+training uses scheduled sampling, feeding the model some of its own sampled
+steps so free-running generation matches teacher-forced prediction. Every step is
 conditioned on the vector still to travel to the target, so a sampled path ends
 where you ask and decides on its own when to press the button. Events keep the
 recorder's native timing, so a replay can move the cursor at the sampled times
@@ -243,20 +248,37 @@ means indistinguishable). Results are in `models/comparison/report.json` and
 the figures `models/comparison/trajectories.png` and
 `models/comparison/speed_profile.png`.
 
-On 3,000 held-out segments from six recording sessions the models never saw
-(medians; GRU at temperature 0.8, DMTG at its default settings):
+On 3,000 held-out segments from recording sessions the models never saw
+(68,535 segments recorded in total; medians; GRU at temperature 0.8, DMTG at
+its default settings):
 
 | | real | GRU, calibrated | GRU, blended | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
 | --- | --- | --- | --- | --- | --- | --- |
-| events per segment | 21 | 21 | 22 | 44 | 24 | 24 |
-| duration, ms | 210 | 223 | 304 | 333 | 184 | 185 |
-| path length / displacement | 1.16 | 1.20 | 1.19 | 1.36 | 1.04 | 1.25 |
-| peak speed, px/ms | 1.37 | 1.27 | 1.09 | 1.23 | 0.83 | 1.52 |
-| duration for 150–300 px moves, ms | 795 | 528 | 778 | 648 | 440 | 447 |
-| duration for 600–1200 px moves, ms | 1553 | 1845 | 1895 | 1547 | 874 | 846 |
-| click lands on target | always | 99.5% of samples | 99.4% | pinned | pinned | pinned |
-| detector accuracy, all features | | 71.2% | 77.2% | 98.0% | 99.3% | 98.9% |
-| detector accuracy, shape only | | 64.2% | 64.0% | 88.1% | 96.5% | 88.6% |
+| events per segment | 62 | 54 | 54 | 87 | 57 | 55 |
+| duration, ms | 871 | 805 | 776 | 660 | 437 | 427 |
+| path length / displacement | 1.15 | 1.10 | 1.10 | 1.23 | 1.03 | 1.29 |
+| peak speed, px/ms | 2.66 | 2.22 | 2.13 | 1.95 | 1.77 | 3.43 |
+| duration for 150–300 px moves, ms | 961 | 816 | 750 | 613 | 443 | 459 |
+| duration for 600–1200 px moves, ms | 1366 | 1571 | 1571 | 1476 | 859 | 889 |
+| click lands on target | always | 100.0% of samples | 99.9% | pinned | pinned | pinned |
+| detector F1, all features | | 65.4% | 67.5% | 99.4% | 99.3% | 99.5% |
+| detector AUC, all features | | 0.707 | 0.734 | 1.000 | 1.000 | 1.000 |
+| detector F1, shape only | | 60.1% | 61.7% | 91.9% | 98.4% | 91.6% |
+
+The held-out sessions change as recording continues, so compare models on the
+same run of the script, not across README revisions. On one identical
+held-out sample, the integer step head cut detection sharply against the
+previous Gaussian step head:
+
+| | real | Gaussian step | integer step |
+| --- | --- | --- | --- |
+| acceleration, 99th percentile | 128 | 58 | 127 |
+| zero-length steps | 1.9% | 3.6% | 2.6% |
+| 1-pixel steps | 19.6% | 26.4% | 23.9% |
+| sharp turns (> 1 rad) | 9.1% | 12.8% | 9.1% |
+| detector F1, all features | | 73.8% | 64.5% |
+| detector AUC, all features | | 0.822 | 0.698 |
+| detector F1, shape only | | 68.2% | 59.5% |
 
 "Calibrated" gives the GRU each held-out session's own timing profile, as a
 deployment would calibrate to its machine; "blended" gives it the pooled
@@ -266,8 +288,8 @@ The detector is a 300-tree random forest scored by 5-fold cross-validation on
 the 3,000 real and 3,000 generated trajectories, using the path resampled to
 24 points in a start-to-click frame, a histogram of time gaps around the
 7.5 ms poll interval, and speed, acceleration, turning and duration summaries.
-The forest is explainable: a depth-3 decision tree reaches 69% against the
-GRU and 93% against DMTG with a handful of rules.
+The forest is explainable: a depth-3 decision tree reaches 93% against DMTG
+with a handful of rules.
 
 - **GRU.** With calibration the poll-jitter tell is largely gone: a
   detector given only the gap histogram falls from about 80% to 61%, and no
@@ -278,12 +300,13 @@ GRU and 93% against DMTG with a handful of rules.
   the data, which put 55 bins on the 7.5 ms tick and one bin on everything
   below 6.5 ms, so a correctly chosen "late poll" was drawn anywhere from 0.5
   to 6.5 ms; the bins now have 0.25 ms resolution through both jitter
-  regions. Without calibration the same model is detected 77% of the time,
-  led by the jitter bands. What remains (71% overall, 64% on shape alone) is
-  motion dynamics rather than poll timing: real movements have larger
-  acceleration extremes (a big step right after a short gap) and slightly
-  fewer repeated positions, plus a slightly higher overshoot rate and faster
-  mid-range moves.
+  regions. The integer step head then fixed the motion tells the Gaussian
+  head left behind. A Gaussian step had to choose between heading wobble and
+  speed extremes; the discrete head matches real acceleration extremes and
+  sharp-turn rates exactly. What remains is small and diffuse: slightly more
+  repeated and 1-pixel positions, paths a little straighter than real, and
+  mid-range moves a little faster. No single feature carries more than 4%
+  of the detector's importance.
 - **DMTG.** Three rules catch it: no gap over 20 ms (real paths pause; a
   timing-free model re-timed at poll rate never does), a 20% share of
   zero-length steps versus 5% (a 64-point path re-timed at 7.5 ms ticks
