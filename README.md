@@ -230,6 +230,7 @@ python -m generator.train --db data/mouse.sqlite3 --epochs 50 --style  # GRU, ~3
 python -m generator.diffusion --db data/mouse.sqlite3 --epochs 150  # DMTG, ~25 min
 python -m generator.becaptcha --db data/mouse.sqlite3               # BeCAPTCHA GAN, ~3 min
 python -m generator.evaluate --db data/mouse.sqlite3                # held-out comparison + plots
+python -m generator.detect --db data/mouse.sqlite3                  # unseen-person detector test
 python generate.py 400 300 1200 700                                 # one GRU path, printed
 python generate.py 400 300 1200 700 --json                          # for another program
 python generate.py 400 300 1200 700 --dmtg --plot path.png          # DMTG path with a picture
@@ -301,6 +302,26 @@ previous Gaussian step head:
 "Calibrated" gives the GRU each held-out session's own timing profile, as a
 deployment would calibrate to its machine; "blended" gives it the pooled
 training profile.
+
+That per-move test has a floor well above 0.5: the same detectors tell the
+held-out session from the recorder's other real sessions at AUC 0.74–0.87.
+`generator.detect` is the stricter test. It trains detectors on real moves
+from the training sessions against generator moves for the same start and
+target points, then scores the unseen held-out session's moves against fresh
+generator moves, alone and averaged over bags of consecutive moves as an
+account-level check would. A perfect generator scores 0.5 there. One real
+training session at a time stands in for the bot, for scale:
+
+| bot | detector | 1 move | 5 moves | 20 moves | 50 moves |
+| --- | --- | --- | --- | --- | --- |
+| GRU (default) | gradient boosting, summary features | 0.786 | 0.956 | 0.999 | 1.000 |
+| GRU (default) | 1D CNN on raw events | 0.628 | 0.756 | 0.894 | 0.946 |
+| real session 31 | gradient boosting | 0.695 | 0.778 | 0.836 | 0.878 |
+| real session 8 | gradient boosting | 0.370 | 0.330 | 0.314 | 0.304 |
+
+So the GRU is reliably detectable from about 20 moves, where a different real
+session is not (session 8 resembles the held-out session, hence below 0.5).
+Results are written to `models/comparison/detect.json`.
 
 Style conditioning, against an otherwise identical GRU (gradient-boosted
 detector AUC, mean of 3 generation seeds, calibrated timing):

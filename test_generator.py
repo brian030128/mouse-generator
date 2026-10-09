@@ -137,6 +137,25 @@ class DataTests(unittest.TestCase):
         self.assertEqual(rows[0].shape[1], 4)
 
 
+class DetectTests(unittest.TestCase):
+    def test_sequence_input_is_rotation_free(self):
+        from generator.detect import MAX_EVENTS, sequence_input
+        t = np.arange(5, dtype=np.float32) * 8
+        right = np.column_stack([t, np.arange(5) * 10.0, np.zeros(5), np.r_[np.zeros(4), 1]])
+        down = np.column_stack([t, np.zeros(5), np.arange(5) * 10.0, np.r_[np.zeros(4), 1]])
+        a, b = sequence_input(right), sequence_input(down)
+        self.assertEqual(a.shape, (MAX_EVENTS, 4))
+        np.testing.assert_allclose(a, b, atol=1e-6)
+        self.assertEqual(a[:, 3].sum(), 4)              # four events, rest padding
+
+    def test_bag_auc_grows_with_bag_size(self):
+        from generator.detect import bag_auc
+        rng = np.random.default_rng(0)
+        human, bot = rng.normal(0, 1, 2000), rng.normal(0.3, 1, 2000)
+        self.assertLess(bag_auc(human, bot, 1), bag_auc(human, bot, 50))
+        self.assertTrue(np.isnan(bag_auc(human[:10], bot[:10], 50)))
+
+
 class DiffusionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
