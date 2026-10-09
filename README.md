@@ -192,6 +192,16 @@ generation time pass the profile of the machine that will replay the paths:
 minutes of ordinary mouse use), `--profile-session ID` reuses a training
 session's, and the default is the pooled training profile.
 
+Every step is also conditioned on the segment's **style** (`--style` in
+training): its duration, how roundabout the path is (log path length minus
+log displacement) and the fraction of the duration at which the cursor first
+gets halfway to the target. Without it, free-running samples collapse onto
+the most likely direct path, while real segments often drift or hesitate
+before heading for the target. At generation time each request draws the
+style of a random training segment with a similar displacement (the table is
+stored in the checkpoint), so durations and detours keep their real joint
+spread; `generate_batch(..., style=...)` sets one explicitly.
+
 **DMTG (`models/mouse_dmtg.pt`).** A reimplementation of *DMTG: A Human-Like
 Mouse Trajectory Generation Bot Based on Entropy-Controlled Diffusion Networks*
 (Liu et al., arXiv:2410.18233): a 1D U-Net denoiser over a fixed-length
@@ -216,7 +226,7 @@ rotated and scaled onto the requested points. Both use recorded poll gaps for
 timing, which the paper (200 Hz data) does not model.
 
 ```powershell
-python -m generator.train --db data/mouse.sqlite3 --epochs 100      # GRU, ~20 min on an RTX 4060
+python -m generator.train --db data/mouse.sqlite3 --epochs 50 --style  # GRU, ~35 min on an RTX 4060
 python -m generator.diffusion --db data/mouse.sqlite3 --epochs 150  # DMTG, ~25 min
 python -m generator.becaptcha --db data/mouse.sqlite3               # BeCAPTCHA GAN, ~3 min
 python -m generator.evaluate --db data/mouse.sqlite3                # held-out comparison + plots
@@ -235,35 +245,43 @@ rows = generate(model, (400, 300), (1200, 700))   # columns: t_ms, x, y, click
 ```
 
 Training holds out whole recording sessions (about 10% of segments) and keeps
-the checkpoint with the best held-out loss. `--temperature` scales the GRU's
+the checkpoint with the best held-out loss among the scheduled-sampling
+epochs; an earlier epoch can score a lower loss once the model starts to
+overfit, but it has never trained on its own samples and drifts when
+generating. `--temperature` scales the GRU's
 step-displacement mixture: 1.0 samples the learned distribution exactly, lower
 values give smoother, more typical paths.
 
 ### How the generators compare
 
 `generator.evaluate` asks each model to travel the same start-to-click vector
-as each held-out real segment, compares summary statistics, and trains a random
-forest to tell real from generated (the white-box test in the DMTG paper; 50%
-means indistinguishable). Results are in `models/comparison/report.json` and
-the figures `models/comparison/trajectories.png` and
-`models/comparison/speed_profile.png`.
+as each held-out real segment, compares summary statistics, and trains two
+detectors to tell real from generated: a random forest (the white-box test in
+the DMTG paper) and a gradient-boosted classifier, which is the stronger of the
+two and the one to beat. AUC 0.5 means indistinguishable. GRUs are resampled
+`--repeats` times (default 3) and the AUCs averaged; held-out sessions with at
+least 200 compared segments also get their own AUC. Pass several checkpoints
+to `--gru` to compare them in one run, and `--holdout 0.2` (with models
+trained the same way) to hold out more than one session. Results are in
+`models/comparison/report.json` and the figures
+`models/comparison/trajectories.png` and `models/comparison/speed_profile.png`.
 
-On 3,000 held-out segments from recording sessions the models never saw
-(68,535 segments recorded in total; medians; GRU at temperature 0.8, DMTG at
+On 3,000 held-out segments from a recording session the models never saw
+(81,000 segments recorded in total; medians; GRU at temperature 0.8, DMTG at
 its default settings):
 
 | | real | GRU, calibrated | GRU, blended | DMTG | BeCAPTCHA fn | BeCAPTCHA GAN |
 | --- | --- | --- | --- | --- | --- | --- |
-| events per segment | 62 | 54 | 54 | 87 | 57 | 55 |
-| duration, ms | 871 | 805 | 776 | 660 | 437 | 427 |
-| path length / displacement | 1.15 | 1.10 | 1.10 | 1.23 | 1.03 | 1.29 |
-| peak speed, px/ms | 2.66 | 2.22 | 2.13 | 1.95 | 1.77 | 3.43 |
-| duration for 150–300 px moves, ms | 961 | 816 | 750 | 613 | 443 | 459 |
-| duration for 600–1200 px moves, ms | 1366 | 1571 | 1571 | 1476 | 859 | 889 |
-| click lands on target | always | 100.0% of samples | 99.9% | pinned | pinned | pinned |
-| detector F1, all features | | 65.4% | 67.5% | 99.4% | 99.3% | 99.5% |
-| detector AUC, all features | | 0.707 | 0.734 | 1.000 | 1.000 | 1.000 |
-| detector F1, shape only | | 60.1% | 61.7% | 91.9% | 98.4% | 91.6% |
+| events per segment | 24 | 29 | 28 | 51 | 29 | 27 |
+| duration, ms | 324 | 490 | 490 | 386 | 225 | 208 |
+| path length / displacement | 1.19 | 1.15 | 1.16 | 1.35 | 1.04 | 1.27 |
+| peak speed, px/ms | 1.40 | 1.31 | 1.31 | 1.19 | 0.86 | 1.70 |
+| duration for 150–300 px moves, ms | 745 | 809 | 841 | 670 | 462 | 423 |
+| duration for 600–1200 px moves, ms | 1422 | 1243 | 1243 | 1405 | 845 | 874 |
+| click lands on target | always | 100.0% of samples | 100.0% | pinned | pinned | pinned |
+| gradient-boosted detector AUC | | 0.784 | 0.802 | 0.999 | 1.000 | 1.000 |
+| random forest AUC, all features | | 0.722 | 0.738 | 0.999 | 1.000 | 1.000 |
+| random forest AUC, shape only | | 0.647 | 0.647 | 0.953 | 0.996 | 0.962 |
 
 The held-out sessions change as recording continues, so compare models on the
 same run of the script, not across README revisions. On one identical
@@ -283,6 +301,25 @@ previous Gaussian step head:
 "Calibrated" gives the GRU each held-out session's own timing profile, as a
 deployment would calibrate to its machine; "blended" gives it the pooled
 training profile.
+
+Style conditioning, against an otherwise identical GRU (gradient-boosted
+detector AUC, mean of 3 generation seeds, calibrated timing):
+
+| | temperature 0.8 | temperature 1.0 |
+| --- | --- | --- |
+| 5 held-out sessions, 50 epochs, `--holdout 0.2`: without style | 0.794 | 0.781 |
+| same, with `--style` | 0.773 | 0.754 |
+| 1 held-out session: previous default (100 epochs, no style) | 0.808 | 0.796 |
+| same session: current default (50 epochs, `--style`) | 0.784 | 0.791 |
+
+Style also brings the path-length ratio, peak speed and long-move durations
+close to the real ones. Its styles come from all training sessions, so on a
+user who moves faster than average short moves run long (602 ms against 404 ms
+for 60–150 px above); drawing styles from the target machine's own recording,
+as `--calibrate` does for timing, is the obvious next step. Two other fixes
+did not help: keeping the most human-looking of six samples per request
+(random forest AUC 0.731 to 0.715) and matching the held-out machine's rate of
+late-delivered events (0.748 to 0.760).
 
 The detector is a 300-tree random forest scored by 5-fold cross-validation on
 the 3,000 real and 3,000 generated trajectories, using the path resampled to

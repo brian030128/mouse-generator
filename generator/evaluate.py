@@ -269,7 +269,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8, help="GRU sampling temperature")
     parser.add_argument("--min-displacement", type=float, default=3.0,
                         help="skip held-out segments shorter than this (DMTG has no path to shape)")
-    parser.add_argument("--holdout", type=float, default=0.2,
+    parser.add_argument("--holdout", type=float, default=0.1,
                         help="must match the GRU's training holdout so held-out sessions are unseen")
     parser.add_argument("--repeats", type=int, default=3,
                         help="generate this many times with different seeds; detector AUCs are averaged")

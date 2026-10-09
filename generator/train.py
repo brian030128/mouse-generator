@@ -76,7 +76,7 @@ def main():
                         help="probability, reached at the last epoch, that an input step is the model's own sample")
     parser.add_argument("--style", action="store_true",
                         help="condition on per-segment style (duration, path excess, halfway time)")
-    parser.add_argument("--holdout", type=float, default=0.2)
+    parser.add_argument("--holdout", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
