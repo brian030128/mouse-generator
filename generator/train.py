@@ -157,7 +157,12 @@ def main():
                   **parts, "seconds": time.time() - start}
         history.append(record)
         print(json.dumps(record))
-        if val_loss < best:
+        # With scheduled sampling, keep only checkpoints from that phase: an
+        # earlier epoch can have a lower teacher-forced loss (the model starts
+        # to overfit) but was never trained on its own samples, and drifts
+        # when generating freely.
+        in_ss_phase = args.scheduled_sampling_fraction <= 0 or ss_prob > 0
+        if in_ss_phase and val_loss < best:
             best = val_loss
             torch.save({"model": model.state_dict(), "config": model.config,
                         "epoch": epoch, "val_loss": val_loss,
