@@ -136,9 +136,11 @@ def classifier_test(real_rows, gen_rows, targets, seed=0):
 
     50% means indistinguishable with these features; 100% means trivially
     detectable. Reported for all features and for shape-only features, with
-    the most important features of the full model.
+    the most important features of the full model. A gradient-boosted
+    detector on all features is reported under "gbm"; it is the stronger of
+    the two, so it is the one to beat.
     """
-    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
     from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
@@ -147,22 +149,25 @@ def classifier_test(real_rows, gen_rows, targets, seed=0):
     y = np.concatenate([np.zeros(len(real_rows)), np.ones(len(gen_rows))])
     x = np.nan_to_num(x, nan=0.0, posinf=1e6, neginf=-1e6)
 
-    def run(columns):
+    def forest():
+        return RandomForestClassifier(300, min_samples_leaf=3, n_jobs=-1, random_state=seed)
+
+    def run(columns, make=forest):
         """Accuracy, precision/recall/F1 for the generated class, ROC AUC."""
-        clf = RandomForestClassifier(300, min_samples_leaf=3, n_jobs=-1, random_state=seed)
         cv = StratifiedKFold(5, shuffle=True, random_state=seed)
-        proba = cross_val_predict(clf, x[:, columns], y, cv=cv, method="predict_proba")[:, 1]
+        proba = cross_val_predict(make(), x[:, columns], y, cv=cv, method="predict_proba")[:, 1]
         pred = proba >= 0.5
         precision, recall, f1, _ = precision_recall_fscore_support(y, pred, average="binary")
-        clf.fit(x[:, columns], y)
         return {"accuracy": float((pred == y).mean()), "precision": float(precision),
-                "recall": float(recall), "f1": float(f1),
-                "auc": float(roc_auc_score(y, proba))}, clf.feature_importances_
+                "recall": float(recall), "f1": float(f1), "auc": float(roc_auc_score(y, proba))}
 
-    full, importances = run(list(range(x.shape[1])))
-    shape, _ = run(SHAPE_FEATURES)
+    columns = list(range(x.shape[1]))
+    full = run(columns)
+    shape = run(SHAPE_FEATURES)
+    gbm = run(columns, lambda: HistGradientBoostingClassifier(random_state=seed))
+    importances = forest().fit(x, y).feature_importances_
     order = np.argsort(importances)[::-1][:8]
-    return {**full, "shape_accuracy": shape["accuracy"], "shape": shape,
+    return {**full, "shape_accuracy": shape["accuracy"], "shape": shape, "gbm": gbm,
             "top_features": [(FEATURE_NAMES[i], float(importances[i])) for i in order]}
 
 
@@ -249,7 +254,11 @@ def plot_speed_profiles(real_rows, generated, path, bins=20):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/mouse.sqlite3")
-    parser.add_argument("--gru", default="models/mouse_gru.pt", help="GRU checkpoint, or '' to skip")
+    parser.add_argument("--gru", nargs="*", default=["models/mouse_gru.pt"],
+                        help="GRU checkpoints, each reported under its file name without 'mouse_' "
+                             "(none to skip)")
+    parser.add_argument("--pooled", action="store_true",
+                        help="also run each GRU with the pooled training timing profile (no calibration)")
     parser.add_argument("--dmtg", default="models/mouse_dmtg.pt", help="DMTG checkpoint, or '' to skip")
     parser.add_argument("--becaptcha-gan", default="models/mouse_becaptcha_gan.pt",
                         help="BeCAPTCHA-Mouse GAN checkpoint, or '' to skip")
@@ -260,7 +269,10 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8, help="GRU sampling temperature")
     parser.add_argument("--min-displacement", type=float, default=3.0,
                         help="skip held-out segments shorter than this (DMTG has no path to shape)")
-    parser.add_argument("--holdout", type=float, default=0.1)
+    parser.add_argument("--holdout", type=float, default=0.2,
+                        help="must match the GRU's training holdout so held-out sessions are unseen")
+    parser.add_argument("--repeats", type=int, default=3,
+                        help="generate this many times with different seeds; detector AUCs are averaged")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -274,23 +286,34 @@ def main():
     starts = np.array([r[0, 1:3] for r in real_rows])
     targets = np.array([r[-1, 1:3] for r in real_rows])
 
-    generated = {}
-    if args.gru and Path(args.gru).exists():
+    gru_models = {}
+    for path in args.gru:
+        if Path(path).exists():
+            from .sample import load_model
+            gru_models[Path(path).stem.removeprefix("mouse_")] = load_model(path)
+    if gru_models:
         from .data import session_profiles
-        from .sample import generate_batch, load_model
-        model = load_model(args.gru)
-        # "gru": timing profile calibrated to each held-out segment's session,
-        # as a deployment would calibrate to its machine. "gru_blend": the
-        # pooled training profile, i.e. no calibration.
+        # Each model's plain entry uses a timing profile calibrated to each
+        # held-out segment's session, as a deployment would calibrate to its
+        # machine; the "_pooled" entry uses the pooled training profile.
         held_out_profiles = session_profiles(val)
-        profiles = np.stack([held_out_profiles.get(s.session_id, model.pooled_profile) for s in val])
-        for name, prof in (("gru", profiles), ("gru_blend", model.pooled_profile)):
-            rows = []
-            for i in range(0, len(val), 512):
-                p = prof[i:i + 512] if prof.ndim == 2 else prof
-                rows.extend(generate_batch(model, starts[i:i + 512], targets[i:i + 512],
-                                           temperature=args.temperature, seed=args.seed + i, profile=p))
-            generated[name] = rows
+
+    def generate_grus(seed):
+        from .sample import generate_batch
+        out = {}
+        for name, model in gru_models.items():
+            calibrated = np.stack([held_out_profiles.get(s.session_id, model.pooled_profile) for s in val])
+            variants = [(name, calibrated)] + ([(name + "_pooled", model.pooled_profile)] if args.pooled else [])
+            for label, prof in variants:
+                rows = []
+                for i in range(0, len(val), 512):
+                    p = prof[i:i + 512] if prof.ndim == 2 else prof
+                    rows.extend(generate_batch(model, starts[i:i + 512], targets[i:i + 512],
+                                               temperature=args.temperature, seed=seed + i, profile=p))
+                out[label] = rows
+        return out
+
+    generated = generate_grus(args.seed)
     if args.dmtg and Path(args.dmtg).exists():
         from .diffusion import generate_dmtg, load_dmtg
         model = load_dmtg(args.dmtg)
@@ -321,6 +344,32 @@ def main():
         report[name] = summarise(stats)
         report["duration_by_distance"][name] = duration_by_distance(stats)
         report["classifier"][name] = classifier_test(real_rows, rows, targets, args.seed)
+
+    # Detector AUCs over repeated generation (GRUs are resampled; the other
+    # generators keep their first draw), overall and per held-out session.
+    sessions = np.array([s.session_id for s in val])
+    big = [int(sid) for sid in np.unique(sessions) if (sessions == sid).sum() >= 200]
+    runs = {name: [] for name in generated}
+    for r in range(args.repeats):
+        draw = generated if r == 0 else {**generated, **generate_grus(args.seed + 100_000 * r)}
+        for name, rows in draw.items():
+            c = report["classifier"][name] if r == 0 else classifier_test(real_rows, rows, targets, args.seed)
+            run = {"rf": c["auc"], "gbm": c["gbm"]["auc"], "shape": c["shape"]["auc"]}
+            for sid in big:
+                k = np.nonzero(sessions == sid)[0]
+                cs = classifier_test([real_rows[i] for i in k], [rows[i] for i in k], targets[k], args.seed)
+                run[f"session_{sid}"] = {"rf": cs["auc"], "gbm": cs["gbm"]["auc"]}
+            runs[name].append(run)
+    report["detector_auc"] = {}
+    for name, rs in runs.items():
+        entry = {}
+        for key in ("rf", "gbm", "shape"):
+            v = np.array([x[key] for x in rs])
+            entry[key] = {"mean": float(v.mean()), "std": float(v.std())}
+        for sid in big:
+            entry[f"session_{sid}"] = {d: float(np.mean([x[f"session_{sid}"][d] for x in rs]))
+                                       for d in ("rf", "gbm")}
+        report["detector_auc"][name] = entry
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -361,6 +410,11 @@ def main():
         print(f"  {n:<9} all features: acc {c['accuracy'] * 100:.1f}% F1 {c['f1'] * 100:.1f}% "
               f"AUC {c['auc']:.3f} | shape only: acc {c['shape_accuracy'] * 100:.1f}% "
               f"F1 {c['shape']['f1'] * 100:.1f}% AUC {c['shape']['auc']:.3f} | top: {top}")
+    print(f"detector AUC over {args.repeats} generation seeds, mean +/- std (0.5 = indistinguishable):")
+    for n, e in report["detector_auc"].items():
+        per = "  ".join(f"s{k.split('_')[1]} {v['gbm']:.3f}" for k, v in e.items() if k.startswith("session_"))
+        print(f"  {n:<16} GBM {e['gbm']['mean']:.3f} +/- {e['gbm']['std']:.3f}  RF {e['rf']['mean']:.3f} +/- "
+              f"{e['rf']['std']:.3f}  shape-only RF {e['shape']['mean']:.3f} | GBM by session: {per}")
     print(f"wrote {out / 'report.json'}, {out / 'trajectories.png'}, {out / 'speed_profile.png'}")
 
 

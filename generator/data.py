@@ -27,6 +27,12 @@ CONTEXT_FEATURES = 9   # remaining vector encodings + elapsed time + start flag
 TICK_BANDS_MS = (0.0, 4.5, 6.0, 7.0, 7.25, 7.5, 7.75, 8.0, 9.0, 12.0, 20.0)
 PROFILE_FEATURES = len(TICK_BANDS_MS) - 1
 INPUT_FEATURES = STEP_FEATURES + CONTEXT_FEATURES + PROFILE_FEATURES
+# Style: per-segment descriptors the model is told up front (duration, how
+# roundabout the path is, when it gets halfway), so free-running sampling
+# reproduces the spread of human moves instead of collapsing onto the most
+# likely direct path. Generation draws them from training segments of similar
+# displacement; see sample_styles.
+STYLE_FEATURES = 3
 DEFAULT_PROFILE = np.array([0.010, 0.020, 0.063, 0.038, 0.336, 0.318, 0.035, 0.063, 0.052, 0.065],
                            dtype=np.float32)
 
@@ -93,6 +99,43 @@ def assign_local_profiles(segments, default, rng, window=(200, 5000), minimum=50
             if hi - lo < minimum:
                 lo, hi = max(0, centre - minimum), min(len(gaps), centre + minimum)
             s.profile = timing_profile(gaps[lo:hi], minimum=1)
+
+
+def style_features(steps):
+    """(STYLE_FEATURES,) descriptors of a recorded or wanted segment.
+
+    log duration (scaled like the elapsed-time input), log path length minus
+    log displacement (0 for a straight line), and the fraction of the
+    duration at which the cursor first gets within half the displacement of
+    the target.
+    """
+    steps = np.asarray(steps, dtype=np.float64)
+    duration = float(steps[:, 2].sum())
+    path = float(np.hypot(steps[:, 0], steps[:, 1]).sum())
+    end = steps[:, :2].sum(0)
+    disp = float(np.hypot(*end))
+    remaining = np.hypot(*(end - np.cumsum(steps[:, :2], axis=0)).T)
+    first = int(np.argmax(remaining <= 0.5 * disp))
+    half_time = float(np.cumsum(steps[:, 2])[first]) / max(duration, 1e-6)
+    return np.array([np.log1p(duration) / 8.0, np.log1p(path) - np.log1p(disp), half_time], np.float32)
+
+
+def style_table(segments):
+    """Rows of (log1p displacement, style...) sorted by displacement, for sample_styles."""
+    rows = np.array([np.concatenate([[np.log1p(np.hypot(*s.steps[:, :2].sum(0)))], style_features(s.steps)])
+                     for s in segments], np.float32)
+    return rows[np.argsort(rows[:, 0], kind="stable")]
+
+
+def sample_styles(table, displacements, rng, neighbours=64):
+    """Draw one style per displacement from the training segments whose
+    displacement is closest, keeping the joint spread of the descriptors."""
+    table = np.asarray(table, np.float32)
+    query = np.log1p(np.asarray(displacements, np.float64).reshape(-1))
+    k = min(neighbours, len(table))
+    idx = np.searchsorted(table[:, 0], query)
+    lo = np.clip(idx - k // 2, 0, len(table) - k)
+    return table[lo + rng.integers(0, k, len(query)), 1:].copy()
 
 
 def load_segments(db_path, max_steps=512, min_steps=1):
@@ -199,8 +242,11 @@ def encode_targets(steps):
     return out
 
 
-def segment_to_arrays(segment):
-    """Build (inputs, targets) for teacher forcing. Both have length n."""
+def segment_to_arrays(segment, style=False):
+    """Build (inputs, targets) for teacher forcing. Both have length n.
+
+    With style, the segment's own style_features are appended to every input.
+    """
     steps = segment.steps
     n = len(steps)
     positions = np.cumsum(steps[:, :2], axis=0)          # after each step
@@ -213,13 +259,15 @@ def segment_to_arrays(segment):
     prev = np.vstack([np.zeros((1, 4), np.float32), encode_step(steps[:-1])])
     profile = DEFAULT_PROFILE if segment.profile is None else segment.profile
     profile = np.broadcast_to(profile.astype(np.float32), (n, PROFILE_FEATURES))
-    inputs = np.concatenate([prev, context_features(remaining, elapsed, is_start), profile], axis=-1)
-    return inputs, encode_targets(steps)
+    parts = [prev, context_features(remaining, elapsed, is_start), profile]
+    if style:
+        parts.append(np.broadcast_to(style_features(steps), (n, STYLE_FEATURES)))
+    return np.concatenate(parts, axis=-1).astype(np.float32), encode_targets(steps)
 
 
 class StepDataset(torch.utils.data.Dataset):
-    def __init__(self, segments):
-        self.items = [segment_to_arrays(s) for s in segments]
+    def __init__(self, segments, style=False):
+        self.items = [segment_to_arrays(s, style) for s in segments]
         self.lengths = [len(x) for x, _ in self.items]
 
     def __len__(self):

@@ -12,9 +12,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .data import (MIN_DT_MS, PIXEL_SCALE, STEP_FEATURES, BucketSampler, StepDataset,
-                   assign_local_profiles, collate, load_segments, session_profiles,
-                   split_by_session, timing_profile)
+from .data import (MIN_DT_MS, PIXEL_SCALE, STEP_FEATURES, STYLE_FEATURES, BucketSampler,
+                   StepDataset, assign_local_profiles, collate, load_segments, session_profiles,
+                   split_by_session, style_table, timing_profile)
 from .model import MouseModel, make_dt_edges
 
 
@@ -74,7 +74,9 @@ def main():
                         help="fraction of epochs at the end that use scheduled sampling (0 disables)")
     parser.add_argument("--scheduled-sampling-max", type=float, default=0.3,
                         help="probability, reached at the last epoch, that an input step is the model's own sample")
-    parser.add_argument("--holdout", type=float, default=0.1)
+    parser.add_argument("--style", action="store_true",
+                        help="condition on per-segment style (duration, path excess, halfway time)")
+    parser.add_argument("--holdout", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -93,7 +95,7 @@ def main():
     assign_local_profiles(train_segments, pooled, rng)
     assign_local_profiles(val_segments, pooled, rng)
     print(f"timing profiles: {len(profiles)} training sessions, local windows per segment")
-    train_set, val_set = StepDataset(train_segments), StepDataset(val_segments)
+    train_set, val_set = StepDataset(train_segments, args.style), StepDataset(val_segments, args.style)
     print(f"steps: {sum(train_set.lengths)} train, {sum(val_set.lengths)} val")
 
     train_loader = torch.utils.data.DataLoader(
@@ -105,7 +107,8 @@ def main():
 
     dt_edges = make_dt_edges(np.concatenate([s.steps[:, 2] for s in train_segments]), args.dt_bins)
     print(f"time-gap bins: {len(dt_edges) + 1}")
-    model = MouseModel(args.hidden, args.layers, args.mixtures, args.dropout, dt_edges).to(device)
+    model = MouseModel(args.hidden, args.layers, args.mixtures, args.dropout, dt_edges,
+                       style_features=STYLE_FEATURES if args.style else 0).to(device)
     print(f"parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M on {device}")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     total_updates = args.epochs * len(train_loader)
@@ -117,6 +120,7 @@ def main():
         progress = (update - warmup) / max(1, total_updates - warmup)
         return args.lr * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * progress)))
 
+    styles = style_table(train_segments).tolist() if args.style else None
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     history = []
@@ -158,7 +162,8 @@ def main():
             torch.save({"model": model.state_dict(), "config": model.config,
                         "epoch": epoch, "val_loss": val_loss,
                         "pooled_profile": pooled.tolist(),
-                        "session_profiles": {int(k): v.tolist() for k, v in profiles.items()}},
+                        "session_profiles": {int(k): v.tolist() for k, v in profiles.items()},
+                        **({"style_table": styles} if args.style else {})},
                        out_path)
     with open(out_path.with_suffix(".history.json"), "w", encoding="utf-8") as handle:
         json.dump(history, handle, indent=1)

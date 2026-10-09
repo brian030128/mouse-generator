@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from generator.data import (INPUT_FEATURES, StepDataset, collate, load_segments,
-                            segment_to_arrays, split_by_session)
+from generator.data import (INPUT_FEATURES, STYLE_FEATURES, StepDataset, collate, load_segments,
+                            sample_styles, segment_to_arrays, split_by_session, style_features,
+                            style_table)
 from generator.model import MouseModel, make_dt_edges
 from generator.sample import generate_batch
 from mouse_event import MouseEvent
@@ -100,6 +101,40 @@ class DataTests(unittest.TestCase):
             self.assertEqual(r[0, 0], 0.0)
             self.assertTrue((np.diff(r[:, 0]) > 0).all())
             self.assertLessEqual(len(r), 6)
+
+    def test_style_features(self):
+        straight = np.array([[10, 0, 8, 0]] * 9 + [[0, 0, 8, 1]], np.float32)
+        duration, excess, half = style_features(straight)
+        self.assertAlmostEqual(duration * 8.0, np.log1p(80.0), places=5)
+        self.assertAlmostEqual(excess, 0.0, places=5)
+        self.assertAlmostEqual(half, 40 / 80)          # 50 of 90 px reached after 5 steps
+        detour = np.array([[0, 30, 8, 0], [10, 0, 8, 0], [0, -30, 8, 1]], np.float32)
+        self.assertGreater(style_features(detour)[1], 1.0)
+        self.assertAlmostEqual(style_features(detour)[2], 1.0)
+
+    def test_style_sampling_follows_displacement(self):
+        table = np.array([[np.log1p(d), d, 0, 0] for d in range(1, 1001)], np.float32)
+        styles = sample_styles(table, [5, 500, 5000], np.random.default_rng(0), neighbours=8)
+        self.assertLessEqual(abs(styles[0, 0] - 5), 8)
+        self.assertLessEqual(abs(styles[1, 0] - 500), 8)
+        self.assertGreaterEqual(styles[2, 0], 993)
+
+    def test_style_model_trains_and_samples(self):
+        segments = load_segments(self.path)
+        dataset = StepDataset(segments, style=True)
+        inputs, targets, mask = collate([dataset[i] for i in range(4)])
+        self.assertEqual(inputs.shape[-1], INPUT_FEATURES + STYLE_FEATURES)
+        edges = make_dt_edges(np.concatenate([s.steps[:, 2] for s in segments]), 8)
+        model = MouseModel(hidden=32, layers=1, mixtures=3, dt_edges=edges, style_features=STYLE_FEATURES)
+        h, _ = model(inputs)
+        loss, _ = model.loss(h, targets, mask)
+        loss.backward()
+        model.style_table = style_table(segments)
+        rows = generate_batch(model, [(0, 0), (10, 10)], [(100, 50), (10, 10)], max_steps=5, seed=1)
+        self.assertEqual(len(rows), 2)
+        rows = generate_batch(model, [(0, 0)], [(100, 50)], max_steps=5, seed=1,
+                              style=style_features(segments[0].steps))
+        self.assertEqual(rows[0].shape[1], 4)
 
 
 class DiffusionTests(unittest.TestCase):

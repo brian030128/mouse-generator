@@ -419,7 +419,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--holdout", type=float, default=0.1)
+    parser.add_argument("--holdout", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     torch.manual_seed(args.seed)

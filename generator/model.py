@@ -47,16 +47,19 @@ def make_dt_edges(dt_ms, bins=32):
 
 
 class MouseModel(nn.Module):
-    def __init__(self, hidden=512, layers=3, mixtures=20, dropout=0.1, dt_edges=None, dt_embed=32):
+    def __init__(self, hidden=512, layers=3, mixtures=20, dropout=0.1, dt_edges=None, dt_embed=32,
+                 style_features=0):
         super().__init__()
         if dt_edges is None:
             dt_edges = make_dt_edges(np.array([7.5]), 1)
         self.config = dict(hidden=hidden, layers=layers, mixtures=mixtures, dropout=dropout,
-                           dt_edges=list(dt_edges), dt_embed=dt_embed)
+                           dt_edges=list(dt_edges), dt_embed=dt_embed, style_features=style_features)
+        # 0 for checkpoints trained before style conditioning existed.
+        self.style_features = style_features
         self.mixtures = mixtures
         self.register_buffer("dt_edges", torch.tensor(dt_edges, dtype=torch.float32))
         self.dt_bins = len(dt_edges) + 1
-        self.embed = nn.Sequential(nn.Linear(INPUT_FEATURES, hidden), nn.GELU())
+        self.embed = nn.Sequential(nn.Linear(INPUT_FEATURES + style_features, hidden), nn.GELU())
         self.rnn = nn.GRU(hidden, hidden, layers, batch_first=True,
                           dropout=dropout if layers > 1 else 0.0)
         self.click_head = nn.Linear(hidden, 1)
