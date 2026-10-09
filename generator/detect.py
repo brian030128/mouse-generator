@@ -32,10 +32,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .data import load_segments, session_profiles, split_by_session
-from .evaluate import real_to_rows, shape_features
+from .evaluate import FEATURE_NAMES, real_to_rows, shape_features
 
 MAX_EVENTS = 256
 BAGS = (1, 5, 20, 50)
+# Summary features grouped by what they describe, for explain(). Correlated
+# features share credit under single-feature permutation, so groups are
+# shuffled together. dt bins are log-ms bands: <4.5, 4.5-6.7, 6.7-8.2,
+# 8.2-12, 12-33, 33-100, 100-400, >400 ms.
+FEATURE_GROUPS = {
+    "event timing (gaps between events)": [f"dt_bin{i}" for i in range(8)] + ["dt_median", "dt_max"],
+    "duration and event count": ["log_duration", "log_steps"],
+    "speed": ["speed_max", "speed_mean", "speed_std", "speed_median"],
+    "acceleration (speed changes)": ["acc_max", "acc_mean"],
+    "position over time (progress toward target)": [f"x{i}" for i in range(24)] + [f"y{i}" for i in range(24)],
+    "directness and detours": ["efficiency", "lateral_max", "x_min", "x_max"],
+    "turning": ["turn_mean", "turn_max", "sharp_turn_frac"],
+    "standing still (zero-length steps)": ["zero_step_frac"],
+    "when peak speed happens": ["peak_pos"],
+}
 
 
 # ----------------------------------------------------------------------------
@@ -137,10 +152,11 @@ def bag_auc(scores_human, scores_bot, size):
     return float(roc_auc_score(np.r_[np.zeros(len(h)), np.ones(len(b))], np.r_[h, b]))
 
 
-def run_detectors(train_human, train_bot, test_human, test_bot, seed=0):
+def run_detectors(train_human, train_bot, test_human, test_bot, seed=0, explain_top=0):
     """Train both detectors on (human, bot) row lists; score the test lists.
 
-    Returns {detector: {"bag_<k>": AUC}} with bags of consecutive moves.
+    Returns {detector: {"bag_<k>": AUC}} with bags of consecutive moves, plus
+    "explain" (see explain()) when explain_top > 0.
     """
     from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -159,7 +175,44 @@ def run_detectors(train_human, train_bot, test_human, test_bot, seed=0):
     cnn = train_sequence_detector(xs, ds, y, seed)
     scores = {"gbm": (margin(test_human), margin(test_bot)),
               "cnn": (sequence_logits(cnn, *seq(test_human)), sequence_logits(cnn, *seq(test_bot)))}
-    return {name: {f"bag_{k}": bag_auc(h, b, k) for k in BAGS} for name, (h, b) in scores.items()}
+    out = {name: {f"bag_{k}": bag_auc(h, b, k) for k in BAGS} for name, (h, b) in scores.items()}
+    if explain_top:
+        out["explain"] = explain(gbm, summary(test_human), summary(test_bot), explain_top, seed)
+    return out
+
+
+def explain(gbm, x_human, x_bot, top=12, seed=0, repeats=3):
+    """What the gradient-boosted detector relies on, on the test moves.
+
+    importance = drop in per-move AUC when a feature (or a group of related
+    features) is shuffled across the test moves; larger means the detector
+    leans on it more. For single features the human and bot 10th/50th/90th
+    percentiles show which way the bot is off.
+    """
+    from sklearn.metrics import roc_auc_score
+    x = np.concatenate([x_human, x_bot])
+    y = np.r_[np.zeros(len(x_human)), np.ones(len(x_bot))]
+    base = roc_auc_score(y, gbm.decision_function(x))
+    rng = np.random.default_rng(seed)
+
+    def drop(columns):
+        losses = []
+        for _ in range(repeats):
+            shuffled = x.copy()
+            perm = rng.permutation(len(x))
+            shuffled[:, columns] = x[perm][:, columns]
+            losses.append(base - roc_auc_score(y, gbm.decision_function(shuffled)))
+        return float(np.mean(losses))
+
+    index = {n: i for i, n in enumerate(FEATURE_NAMES)}
+    groups = sorted(((name, drop([index[f] for f in feats])) for name, feats in FEATURE_GROUPS.items()),
+                    key=lambda g: -g[1])
+    singles = sorted(((n, drop([i])) for n, i in index.items() if n != "log_disp"), key=lambda f: -f[1])[:top]
+    pct = lambda v: [float(q) for q in np.percentile(v, [10, 50, 90])]
+    return {"auc": float(base),
+            "groups": [{"group": g, "importance": v} for g, v in groups],
+            "features": [{"feature": n, "importance": v, "human_p10_50_90": pct(x_human[:, index[n]]),
+                          "bot_p10_50_90": pct(x_bot[:, index[n]])} for n, v in singles]}
 
 
 # ----------------------------------------------------------------------------
@@ -217,7 +270,7 @@ def main():
     train_segs = pick(train, args.train_moves)
     print(f"generator: training detectors on {len(train_segs)} real + generated moves")
     results["generator"] = run_detectors([real_to_rows(s) for s in train_segs], generated_for(train_segs, 1),
-                                         test_human, generated_for(test_segs, 2), args.seed)
+                                         test_human, generated_for(test_segs, 2), args.seed, explain_top=12)
 
     # Real sessions as stand-in bots: each is removed from the human side and
     # split in half (first half trains the detector, second half is tested).
@@ -246,7 +299,17 @@ def main():
         if not isinstance(res, dict):
             continue
         for det, aucs in res.items():
+            if det == "explain":
+                continue
             print(f"{name:<14}{det:<10}" + "".join(f"{aucs[f'bag_{k}']:>8.3f}" for k in BAGS))
+    ex = results["generator"]["explain"]
+    print(f"what gives the generator away (drop in per-move AUC {ex['auc']:.3f} when shuffled):")
+    for g in ex["groups"]:
+        print(f"  {g['importance']:6.3f}  {g['group']}")
+    print(f"{'feature':<18}{'importance':>11}  {'real p10 / median / p90':>28}  {'generator p10 / median / p90':>30}")
+    for f in ex["features"]:
+        fmt = lambda v: " / ".join(f"{q:.3g}" for q in v)
+        print(f"{f['feature']:<18}{f['importance']:>11.3f}  {fmt(f['human_p10_50_90']):>28}  {fmt(f['bot_p10_50_90']):>30}")
     print(f"wrote {out}")
 
 
