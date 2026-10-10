@@ -79,6 +79,8 @@ class FakeSerial:
             self.lines.append(b'OK STOP\n')
         elif command == 'HELLO':
             self.lines.append(b'OK HELLO 1 4096 1000 60000000 1500 USB=1\n')
+        elif command == 'IDENTITY':
+            self.lines.append(b'OK IDENTITY VID=046D PID=C077\n')
         elif command.startswith('LOAD '):
             self.lines.append(b'OK LOAD\n')
         elif command.startswith('E '):
@@ -94,6 +96,16 @@ class FakeSerial:
 
 
 class RelayTests(unittest.TestCase):
+    def test_identity_query(self):
+        port = FakeSerial()
+        self.assertEqual(Relay(port).identity(), 'OK IDENTITY VID=046D PID=C077')
+        self.assertEqual(port.writes, [frame('IDENTITY')])
+
+    def test_identity_rejects_unexpected_reply(self):
+        with patch.object(Relay, 'read_line', return_value='ERR COMMAND'):
+            with self.assertRaisesRegex(RuntimeError, 'unexpected identity response'):
+                Relay(FakeSerial()).identity()
+
     def test_preload_run_completion_and_stop(self):
         port = FakeSerial()
         self.assertEqual(Relay(port).play([Event(8000, 3, 4)]),
@@ -128,6 +140,8 @@ class DescriptorTests(unittest.TestCase):
         self.assertTrue(xy['relative'])
         self.assertEqual((xy['bits'], xy['logical_min'], xy['logical_max']), (16, -32767, 32767))
         self.assertEqual(summary['collections'][0]['usages'], [2])
+        buttons = next(f for f in summary['fields'] if f['usage_page'] == 9 and not f['constant'])
+        self.assertEqual((buttons['usage_min'], buttons['usage_max'], buttons['count']), (1, 3, 3))
 
     def test_global_push_pop(self):
         summary = descriptor_summary(bytes.fromhex('750895018102A4751095028102B48102'))

@@ -128,6 +128,13 @@ class Relay:
         if reply != "OK STOP":
             raise RuntimeError(f"expected stop acknowledgement, received {reply!r}")
 
+    def identity(self):
+        self.port.write(frame("IDENTITY"))
+        reply = self.read_line(time.monotonic() + 3)
+        if not reply.startswith("OK IDENTITY "):
+            raise RuntimeError(f"unexpected identity response: {reply}")
+        return reply
+
     def play(self, events):
         try:
             # STOP and flush stale replies before the protocol handshake.
@@ -184,6 +191,7 @@ def main():
     parser.add_argument("--port", help="controller UART port, e.g. COM3 or /dev/ttyUSB0")
     parser.add_argument("--list-ports", action="store_true")
     parser.add_argument("--probe", action="store_true", help="stop the board and query firmware/USB readiness; no motion")
+    parser.add_argument("--identity", action="store_true", help="with --probe, print configured USB identity over UART")
     parser.add_argument("--circle", action="store_true", help="send a visible click-free circle diagnostic instead of a JSON path")
     parser.add_argument("--radius", type=float, default=120, help="circle radius in counts before scaling")
     parser.add_argument("--turns", type=int, default=3)
@@ -205,6 +213,8 @@ def main():
             parser.error("--circle cannot be combined with a path, --probe or --clicks")
         if args.probe and args.dry_run:
             parser.error("--probe requires a real serial port and cannot use --dry-run")
+        if args.identity and not args.probe:
+            parser.error("--identity requires --probe")
         if not args.probe:
             rows = circle_rows(args.radius, args.turns, args.period) if args.circle else load_rows(args.path)
             events, shifted = plan(rows, counts_per_pixel=args.counts_per_pixel,
@@ -223,6 +233,8 @@ def main():
         with port:
             relay = Relay(port)
             print(relay.probe() if args.probe else json.dumps(relay.play(events)))
+            if args.identity:
+                print(relay.identity())
     except ImportError:
         parser.exit(2, "Install hardware dependencies: python -m pip install -r requirements-hardware.txt\n")
     except (ValueError, OSError, RuntimeError, TimeoutError) as exc:

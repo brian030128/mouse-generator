@@ -12,13 +12,13 @@
 #error Disable USB CDC, MSC and DFU on boot for a mouse-only device
 #endif
 
-// Generic Desktop / Mouse, five buttons, relative signed 16-bit X/Y,
+// Generic Desktop / Mouse, three buttons, relative signed 16-bit X/Y,
 // signed 8-bit wheel. Report protocol only; no keyboard or vendor collection.
 static const uint8_t REPORT_DESCRIPTOR[] = {
   0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x01,
   0x09, 0x01, 0xA1, 0x00, 0x05, 0x09, 0x19, 0x01,
-  0x29, 0x05, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
-  0x95, 0x05, 0x81, 0x02, 0x75, 0x03, 0x95, 0x01,
+  0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+  0x95, 0x03, 0x81, 0x02, 0x75, 0x05, 0x95, 0x01,
   0x81, 0x03, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
   0x16, 0x01, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10,
   0x95, 0x02, 0x81, 0x06, 0x09, 0x38, 0x15, 0x81,
@@ -110,6 +110,10 @@ void command(char *s) {
   if (!strcmp(s, "HELLO")) {
     Serial0.printf("OK HELLO 1 %u %u %u %u USB=%u\n", MAX_EVENTS,
                    MIN_GAP_US, MAX_DURATION_US, WATCHDOG_MS, hid.ready());
+  } else if (!strcmp(s, "IDENTITY")) {
+    Serial0.printf("OK IDENTITY VID=%04X PID=%04X RELEASE=%04X MFR=%s PRODUCT=%s SERIAL=%s\n",
+                   USB.VID(), USB.PID(), USB.firmwareVersion(), USB.manufacturerName(),
+                   USB.productName(), USB.serialNumber());
   } else if (!strcmp(s, "PING")) {
     Serial0.println("OK PING");
   } else if (!strncmp(s, "LOAD ", 5) && !running) {
@@ -126,7 +130,7 @@ void command(char *s) {
         v[0] != loaded || v[1] < 0 || v[1] > MAX_DURATION_US ||
         (loaded && v[1] < events[loaded - 1].due + MIN_GAP_US) ||
         v[2] < -32767 || v[2] > 32767 || v[3] < -32767 || v[3] > 32767 ||
-        v[4] < 0 || v[4] > 31 || v[5] < -127 || v[5] > 127) {
+        v[4] < 0 || v[4] > 7 || v[5] < -127 || v[5] > 127) {
       stopRun("ERR EVENT"); return;
     }
     events[loaded] = {uint32_t(v[1]), {uint8_t(v[4]), int16_t(v[2]),
@@ -151,11 +155,12 @@ void setup() {
   pinMode(STOP_PIN, INPUT_PULLUP);
   Serial0.setRxBufferSize(2048);
   Serial0.begin(CONTROL_BAUD, SERIAL_8N1, CONTROL_RX_PIN, CONTROL_TX_PIN);
+  USB.VID(MOUSE_USB_VID);
+  USB.PID(MOUSE_USB_PID);
+  USB.firmwareVersion(MOUSE_DEVICE_RELEASE);
   USB.productName(PRODUCT_NAME);
   USB.manufacturerName(MANUFACTURER_NAME);
-  char serial[17];
-  snprintf(serial, sizeof(serial), "%012llX", (unsigned long long)ESP.getEfuseMac());
-  USB.serialNumber(serial);
+  USB.serialNumber(MOUSE_USB_SERIAL);
   USB.usbClass(0); USB.usbSubClass(0); USB.usbProtocol(0);
   USB.usbAttributes(0x80); USB.usbPower(100); USB.webUSB(false);
   hid.begin();

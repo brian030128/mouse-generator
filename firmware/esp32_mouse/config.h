@@ -13,7 +13,14 @@ constexpr unsigned MIN_GAP_US = 1000;
 constexpr unsigned WATCHDOG_MS = 1500;
 constexpr unsigned MAX_LATENESS_US = 20000;
 
-// Keep the Arduino core's development VID/PID. For distribution, obtain an
-// assigned VID/PID or explicit permission from its owner; do not copy a mouse.
-constexpr char PRODUCT_NAME[] = "Mouse Generator Relay";
-constexpr char MANUFACTURER_NAME[] = "Mouse Generator Project";
+// User-selected USB identity test profile. Logitech documents the M105 IDs:
+// https://support.logi.com/hc/de/articles/360023306434-M105-Technical-Specifications
+// This changes enumeration identity; it is not a complete M105 implementation.
+constexpr uint16_t MOUSE_USB_VID = 0x046D;
+constexpr uint16_t MOUSE_USB_PID = 0xC077;
+constexpr uint16_t MOUSE_DEVICE_RELEASE = 0x0100;
+constexpr char PRODUCT_NAME[] = "USB Optical Mouse";
+constexpr char MANUFACTURER_NAME[] = "Logitech";
+// Explicitly avoid publishing the ESP32's MAC/OUI as the USB serial number.
+// This test serial is not copied from a physical mouse.
+constexpr char MOUSE_USB_SERIAL[] = "000000000001";

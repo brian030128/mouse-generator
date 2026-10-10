@@ -102,6 +102,7 @@ python -m pip install -r requirements-hardware.txt
 python generate.py 400 300 1200 700 --json > path.json
 python replay.py --list-ports
 python replay.py --port COM3 --probe
+python replay.py --port COM3 --probe --identity
 python replay.py examples/mouse_smoke.json --port COM3
 python replay.py --port COM3 --circle --radius 120 --turns 3 --period 2
 python replay.py path.json --dry-run
@@ -130,7 +131,7 @@ receiver feedback here, so exact endpoints and clicks on the requested target
 are not guaranteed. The checkpoint's native poll jitter also need not survive
 USB dispatch and the receiving OS unchanged.
 
-Reports use a five-button mask, signed 16-bit relative X/Y and signed 8-bit wheel,
+Reports use a three-button mask, signed 16-bit relative X/Y and signed 8-bit wheel,
 with report ID 1. The wire input report is seven bytes including its ID. Playback
 supports 4096 reports and 60 seconds per loaded plan. Cumulative count rounding
 preserves the scaled total displacement. Events closer than 1 ms are delayed
@@ -141,7 +142,9 @@ lateness, not receiver-observed timing. No commands are resumed automatically.
 
 UART uses ASCII payloads framed as `payload*CCCC\n`, with CRC-16/CCITT-FALSE
 (initial 0xFFFF, polynomial 0x1021); replies are plain ASCII. Commands are HELLO,
-LOAD count, E index due_us dx dy buttons wheel, RUN and PING. A plain STOP line
+LOAD count, E index due_us dx dy buttons wheel, RUN, PING and IDENTITY. IDENTITY
+returns the configured VID/PID, release and strings over UART; receiver-side
+enumeration is still needed to verify the host-visible fingerprint. A plain STOP line
 is always accepted. Reports are loaded and acknowledged before RUN. Each event
 must be ordered, in range and at least 1 ms after its predecessor; the last
 report must release all buttons. CRC, parser, USB, watchdog or switch errors
@@ -198,20 +201,37 @@ pointer settings and USB/OS timing when interpreting them.
 Standard HID means a generic host driver can interpret the mouse reports; it
 does not make every mouse's USB identity or behavior identical. See the
 [USB-IF HID specification](https://www.usb.org/document-library/device-class-definition-hid-111).
-The firmware uses truthful project strings and the selected Arduino core's
-development VID/PID (the pinned generic S3 variant supplies Espressif
-0x303A:0x1001; other board variants can differ).
-These distinguish it from a reference with other IDs. VID ownership and PID
-assignment are explained by [USB-IF](https://www.usb.org/getting-vendor-id): obtain
-an assignment or permission for a distributed product. Copying Logitech/Razer
-IDs or strings does not establish authorization or reproduce that hardware.
+The current user-selected identity test profile uses VID **0x046D**, PID
+**0xC077**, manufacturer **Logitech**, and product **USB Optical Mouse**.
+Logitech documents this VID/PID for the basic wired
+[M105](https://support.logi.com/hc/de/articles/360023306434-M105-Technical-Specifications).
+The identity is explicitly set in `esp32_mouse/config.h` before USB starts,
+so the selected Arduino board's Espressif defaults cannot override it.
+Release remains 0x0100 and the test serial is `000000000001`, rather than
+the ESP32 MAC/OUI. This serial is not copied from an individual commercial unit.
+Use `replay.py --port COM3 --probe --identity` to inspect these configured values.
+
+This is an identity test, not a complete M105 clone. Logitech specifies a
+low-speed USB device; the S3 firmware uses its native full-speed USB peripheral.
+The relay retains 16-bit axes and report ID 1; report topology, endpoint timing,
+serial presence, version, USB request behavior and firmware remain independently
+observable. Replug native USB after flashing to force fresh receiver enumeration,
+then take a new snapshot on the receiving computer. Previously saved snapshots
+do not update themselves. Matching IDs and strings alone does not prove that
+the mouse is indistinguishable from the commercial model.
+
+The previous project profile can be restored in `config.h` with VID 0x303A,
+PID 0x1001, manufacturer `Mouse Generator Project` and product
+`Mouse Generator Relay`, then recompiling and flashing. VID ownership and PID
+assignment are explained by [USB-IF](https://www.usb.org/getting-vendor-id);
+public catalog entries are not an assignment to this project for distribution.
 
 The pinned Arduino HID backend itself creates IN and OUT interrupt endpoints,
 a `TinyUSB HID` interface string and a 1 ms advertised interval; see
 [Espressif's implementation](https://github.com/espressif/arduino-esp32/blob/3.3.8/libraries/USB/src/USBHID.cpp).
 The application advertises only a mouse HID collection, but those USB topology
-details can differ from commercial mice. Firmware deliberately makes no
-claim of commercial-device impersonation or universal indistinguishability.
+details can differ from commercial mice. Firmware makes no claim of universal
+indistinguishability.
 
 Run `python -m unittest test_hardware -v` for count conversion, framing,
 transport failure handling, report layout and comparison semantics.
