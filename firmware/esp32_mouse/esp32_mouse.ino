@@ -1,9 +1,10 @@
 #include <Arduino.h>
 #include <USB.h>
-#include <USBHID.h>
 #include <esp_timer.h>
 #include <errno.h>
+#include <atomic>
 #include "config.h"
+#include "usb_profile.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3 || ARDUINO_USB_MODE != 0
 #error Select ESP32-S3 and USB Mode = USB-OTG (TinyUSB)
@@ -12,46 +13,61 @@
 #error Disable USB CDC, MSC and DFU on boot for a mouse-only device
 #endif
 
-// Generic Desktop / Mouse, three buttons, relative signed 16-bit X/Y,
-// signed 8-bit wheel. Report protocol only; no keyboard or vendor collection.
-static const uint8_t REPORT_DESCRIPTOR[] = {
-  0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x01,
-  0x09, 0x01, 0xA1, 0x00, 0x05, 0x09, 0x19, 0x01,
-  0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
-  0x95, 0x03, 0x81, 0x02, 0x75, 0x05, 0x95, 0x01,
-  0x81, 0x03, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
-  0x16, 0x01, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10,
-  0x95, 0x02, 0x81, 0x06, 0x09, 0x38, 0x15, 0x81,
-  0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
-  0xC0, 0xC0
-};
-
-USBHID hid;
-class RelayMouse : public USBHIDDevice {
-public:
-  RelayMouse() { hid.addDevice(this, sizeof(REPORT_DESCRIPTOR)); }
-  uint16_t _onGetDescriptor(uint8_t *dst) override {
-    memcpy(dst, REPORT_DESCRIPTOR, sizeof(REPORT_DESCRIPTOR));
-    return sizeof(REPORT_DESCRIPTOR);
-  }
-} mouse;
-
 struct __attribute__((packed)) MouseReport {
   uint8_t buttons;
-  int16_t dx, dy;
+  int8_t dx, dy;
   int8_t wheel;
 };
-static_assert(sizeof(MouseReport) == 6, "HID report layout mismatch");
+static_assert(sizeof(MouseReport) == 4, "HID report layout mismatch");
 struct Event { uint32_t due; MouseReport report; };
 Event events[MAX_EVENTS];
 unsigned expected = 0, loaded = 0, cursor = 0;
 bool running = false, releasePending = true;
-uint8_t heldButtons = 0;
+std::atomic<uint8_t> heldButtons{0};
+SemaphoreHandle_t sent = nullptr;
+std::atomic<uint8_t> idleRate{0};
+uint32_t lastReport = 0;
 int64_t epoch = 0;
 uint32_t lastContact = 0, worstLate = 0;
 char line[128];
 unsigned lineLength = 0;
 bool overflow = false;
+
+extern "C" const uint8_t *tud_hid_descriptor_report_cb(uint8_t instance) {
+  return instance == 0 ? REPORT_DESCRIPTOR : nullptr;
+}
+extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t id,
+    hid_report_type_t type, uint8_t *buffer, uint16_t length) {
+  if (instance || id || type != HID_REPORT_TYPE_INPUT) return 0;
+  // A state query must not replay the last relative displacement.
+  MouseReport state = {heldButtons, 0, 0, 0};
+  uint16_t count = min(length, uint16_t(tud_hid_n_get_protocol(0) == HID_PROTOCOL_BOOT ? 3 : 4));
+  memcpy(buffer, &state, count);
+  return count;
+}
+extern "C" void tud_hid_set_report_cb(uint8_t, uint8_t, hid_report_type_t,
+                                      const uint8_t *, uint16_t) {}
+extern "C" bool tud_hid_set_idle_cb(uint8_t instance, uint8_t rate) {
+  if (instance) return false;
+  idleRate = rate;
+  return true;
+}
+extern "C" void tud_hid_set_protocol_cb(uint8_t, uint8_t) {}
+// Arduino-ESP32 3.3.8 / its pinned TinyUSB use uint16_t for the callback length.
+extern "C" void tud_hid_report_complete_cb(uint8_t, const uint8_t *, uint16_t) {
+  if (sent) xSemaphoreGive(sent);
+}
+
+bool sendMouse(const MouseReport &report) {
+  if (!sent || !tud_hid_n_ready(0)) return false;
+  xSemaphoreTake(sent, 0);  // discard an acknowledgement from an earlier timeout
+  uint16_t length = tud_hid_n_get_protocol(0) == HID_PROTOCOL_BOOT ? 3 : 4;
+  if (!tud_hid_n_report(0, 0, &report, length)) return false;
+  // A timeout can happen after transfer: callers abort and never retry motion.
+  bool ok = xSemaphoreTake(sent, pdMS_TO_TICKS(30)) == pdTRUE;
+  lastReport = millis();
+  return ok;
+}
 
 uint16_t crc16(const char *s) {
   uint16_t crc = 0xFFFF;
@@ -64,9 +80,9 @@ uint16_t crc16(const char *s) {
 }
 
 void releaseButtons() {
-  if (releasePending && hid.ready()) {
+  if (releasePending && tud_hid_n_ready(0)) {
     MouseReport report = {0, 0, 0, 0};
-    if (hid.SendReport(1, &report, sizeof(report), 20)) {
+    if (sendMouse(report)) {
       heldButtons = 0;
       releasePending = false;
     }
@@ -108,12 +124,12 @@ void command(char *s) {
   if (crc16(s) != received) { stopRun("ERR CRC"); return; }
   lastContact = millis();
   if (!strcmp(s, "HELLO")) {
-    Serial0.printf("OK HELLO 1 %u %u %u %u USB=%u\n", MAX_EVENTS,
-                   MIN_GAP_US, MAX_DURATION_US, WATCHDOG_MS, hid.ready());
+    Serial0.printf("OK HELLO 2 %u %u %u %u USB=%u\n", MAX_EVENTS,
+                   MIN_GAP_US, MAX_DURATION_US, WATCHDOG_MS, tud_hid_n_ready(0));
   } else if (!strcmp(s, "IDENTITY")) {
-    Serial0.printf("OK IDENTITY VID=%04X PID=%04X RELEASE=%04X MFR=%s PRODUCT=%s SERIAL=%s\n",
-                   USB.VID(), USB.PID(), USB.firmwareVersion(), USB.manufacturerName(),
-                   USB.productName(), USB.serialNumber());
+    Serial0.printf("OK IDENTITY VID=%04X PID=%04X RELEASE=%04X MFR=%s PRODUCT=%s SERIAL=none EP_IN=81 SIZE=4 INTERVAL=10 BOOT=1 SPEED=full EP0=%u\n",
+                   MOUSE_USB_VID, MOUSE_USB_PID, MOUSE_DEVICE_RELEASE, MANUFACTURER_NAME,
+                   PRODUCT_NAME, CFG_TUD_ENDPOINT0_SIZE);
   } else if (!strcmp(s, "PING")) {
     Serial0.println("OK PING");
   } else if (!strncmp(s, "LOAD ", 5) && !running) {
@@ -129,21 +145,21 @@ void command(char *s) {
     if (!numbers(s + 2, v, 6) || !expected || loaded >= expected ||
         v[0] != loaded || v[1] < 0 || v[1] > MAX_DURATION_US ||
         (loaded && v[1] < events[loaded - 1].due + MIN_GAP_US) ||
-        v[2] < -32767 || v[2] > 32767 || v[3] < -32767 || v[3] > 32767 ||
+        v[2] < -127 || v[2] > 127 || v[3] < -127 || v[3] > 127 ||
         v[4] < 0 || v[4] > 7 || v[5] < -127 || v[5] > 127) {
       stopRun("ERR EVENT"); return;
     }
-    events[loaded] = {uint32_t(v[1]), {uint8_t(v[4]), int16_t(v[2]),
-                                      int16_t(v[3]), int8_t(v[5])}};
+    events[loaded] = {uint32_t(v[1]), {uint8_t(v[4]), int8_t(v[2]),
+                                      int8_t(v[3]), int8_t(v[5])}};
     Serial0.printf("OK E %u\n", loaded++);
   } else if (!strcmp(s, "RUN") && !running) {
     releaseButtons();
     if (!expected || loaded != expected || events[loaded - 1].report.buttons ||
-        !hid.ready() || releasePending || digitalRead(STOP_PIN) == LOW) {
+        !tud_hid_n_ready(0) || releasePending || digitalRead(STOP_PIN) == LOW) {
       stopRun("ERR NOT_READY"); return;
     }
     cursor = worstLate = 0;
-    epoch = esp_timer_get_time() + 10000;  // time to return the RUN acknowledgement
+    epoch = esp_timer_get_time() + 20000;  // time to return the RUN acknowledgement
     running = true;
     Serial0.println("OK RUN");
   } else {
@@ -160,13 +176,17 @@ void setup() {
   USB.firmwareVersion(MOUSE_DEVICE_RELEASE);
   USB.productName(PRODUCT_NAME);
   USB.manufacturerName(MANUFACTURER_NAME);
-  USB.serialNumber(MOUSE_USB_SERIAL);
   USB.usbClass(0); USB.usbSubClass(0); USB.usbProtocol(0);
-  USB.usbAttributes(0x80); USB.usbPower(100); USB.webUSB(false);
-  hid.begin();
-  USB.begin();
+  USB.usbAttributes(0xA0); USB.usbPower(100); USB.webUSB(false);
+  sent = xSemaphoreCreateBinary();
+  if (!sent || tinyusb_enable_interface(USB_INTERFACE_HID, sizeof(CONFIG_DESCRIPTOR) - 9,
+                                        loadMouseInterface) != ESP_OK) {
+    Serial0.println("ERR USB_INIT");
+    return;
+  }
+  if (!USB.begin()) { Serial0.println("ERR USB_INIT"); return; }
   lastContact = millis();
-  Serial0.println("READY MOUSE_RELAY 1");
+  Serial0.println("READY MOUSE_RELAY 2");
 }
 
 void loop() {
@@ -184,7 +204,14 @@ void loop() {
     } else { overflow = true; }
   }
   releaseButtons();
-  if (!running) { delay(1); return; }
+  if (!running) {
+    uint8_t rate = idleRate.load();
+    if (rate && !releasePending && tud_hid_n_ready(0) &&
+        uint32_t(millis() - lastReport) >= uint32_t(rate) * 4) {
+      sendMouse({heldButtons, 0, 0, 0});
+    }
+    delay(1); return;
+  }
   if (digitalRead(STOP_PIN) == LOW) { stopRun("ERR SWITCH"); return; }
   if (uint32_t(millis() - lastContact) > WATCHDOG_MS) {
     stopRun("ERR WATCHDOG"); return;
@@ -193,12 +220,12 @@ void loop() {
   int64_t elapsed = esp_timer_get_time() - epoch;
   if (elapsed < events[cursor].due) { delayMicroseconds(100); return; }
   uint32_t late = elapsed - events[cursor].due;
-  if (late > MAX_LATENESS_US || !hid.ready()) {
+  if (late > MAX_LATENESS_US || !tud_hid_n_ready(0)) {
     stopRun("ERR USB_OR_LATE"); return;
   }
   worstLate = max(worstLate, late);
   heldButtons = events[cursor].report.buttons;
-  if (!hid.SendReport(1, &events[cursor].report, sizeof(MouseReport), 20)) {
+  if (!sendMouse(events[cursor].report)) {
     // Never retry displacement: a timeout may occur after transmission.
     stopRun("ERR HID_SEND"); return;
   }

@@ -16,7 +16,8 @@ import time
 
 MAX_EVENTS = 4096
 MAX_DURATION_US = 60_000_000
-MIN_GAP_US = 1000
+MIN_GAP_US = 10000
+MAX_AXIS = 127
 
 
 def circle_rows(radius=120.0, turns=3, period=2.0):
@@ -47,7 +48,8 @@ def plan(rows, *, counts_per_pixel=1.0, clicks=False, click_hold_ms=30.0):
     """Convert absolute positions to counts with cumulative rounding.
 
     The first row is an anchor; it does not place the receiving cursor.
-    Crowded events are delayed to fit the full-speed USB 1 ms cadence.
+    Crowded events are delayed to fit the advertised 10 ms polling interval.
+    Larger deltas are split into bounded reports without losing counts.
     """
     if not math.isfinite(counts_per_pixel) or counts_per_pixel <= 0:
         raise ValueError("counts-per-pixel must be finite and positive")
@@ -77,14 +79,26 @@ def plan(rows, *, counts_per_pixel=1.0, clicks=False, click_hold_ms=30.0):
                     round((y - clean[0][2]) * counts_per_pixel))
         dx, dy = position[0] - previous[0], position[1] - previous[1]
         if max(abs(dx), abs(dy)) > 32767:
-            raise ValueError("displacement exceeds the signed 16-bit HID report range")
+            raise ValueError("single-row displacement exceeds the planner's 32767-count safety limit")
         requested = round((t - clean[0][0]) * 1000)
-        due = max(requested, events[-1].due_us + MIN_GAP_US if events else 0)
-        shifted += due != requested
-        events.append(Event(due, dx, dy, int(clicks and click)))
+        parts = max(1, math.ceil(max(abs(dx), abs(dy)) / MAX_AXIS))
+        # Allocate displacement evenly using cumulative rounding, rather than
+        # clamping (which loses counts) or appending one long-axis tail.
+        allocated_x = allocated_y = 0
+        button = int(clicks and click)
+        for part in range(1, parts + 1):
+            due = max(requested, events[-1].due_us + MIN_GAP_US if events else 0)
+            if part == 1:
+                shifted += due != requested
+            next_x, next_y = round(dx * part / parts), round(dy * part / parts)
+            events.append(Event(due, next_x - allocated_x, next_y - allocated_y,
+                                button if part == parts else 0))
+            allocated_x, allocated_y = next_x, next_y
         previous = position
         if clicks and click:
-            events.append(Event(due + round(click_hold_ms * 1000), 0, 0))
+            events.append(Event(due + max(MIN_GAP_US, round(click_hold_ms * 1000)), 0, 0))
+        if len(events) > MAX_EVENTS:
+            raise ValueError("plan exceeds firmware limits (4096 events / 60 seconds)")
     if len(events) > MAX_EVENTS or events[-1].due_us > MAX_DURATION_US:
         raise ValueError("plan exceeds firmware limits (4096 events / 60 seconds)")
     return events, shifted
@@ -139,7 +153,7 @@ class Relay:
         try:
             # STOP and flush stale replies before the protocol handshake.
             hello = self.probe()
-            if hello != "OK HELLO 1 4096 1000 60000000 1500 USB=1":
+            if hello != "OK HELLO 2 4096 10000 60000000 1500 USB=1":
                 raise RuntimeError(f"incompatible firmware or target USB unavailable: {hello}")
             self.request(f"LOAD {len(events)}", "OK LOAD")
             for i, e in enumerate(events):

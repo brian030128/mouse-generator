@@ -131,11 +131,16 @@ receiver feedback here, so exact endpoints and clicks on the requested target
 are not guaranteed. The checkpoint's native poll jitter also need not survive
 USB dispatch and the receiving OS unchanged.
 
-Reports use a three-button mask, signed 16-bit relative X/Y and signed 8-bit wheel,
-with report ID 1. The wire input report is seven bytes including its ID. Playback
+Reports use a three-button mask and signed 8-bit relative X/Y and wheel, without
+a report ID. The wire input report is four bytes; in boot protocol it is three
+bytes (buttons/X/Y only; wheel is unavailable). Playback
 supports 4096 reports and 60 seconds per loaded plan. Cumulative count rounding
-preserves the scaled total displacement. Events closer than 1 ms are delayed
-to fit USB report spacing; the sender reports how many rows shifted. The board
+preserves the scaled total displacement. Large deltas are split evenly into
+reports bounded to +/-127 counts, preserving both axes' sums. For an enabled
+click, only the last split motion report presses the button. Events closer than
+10 ms are delayed to fit the advertised USB polling interval; the sender reports
+how many source rows shifted. Splitting can stretch the path and change pointer
+acceleration; it does not preserve exact pixel positions or arrival timing. The board
 aborts rather than bursting reports if dispatch falls more than 20 ms behind or
 a HID send fails. Completion reports the number of reports and largest dispatch
 lateness, not receiver-observed timing. No commands are resumed automatically.
@@ -143,13 +148,17 @@ lateness, not receiver-observed timing. No commands are resumed automatically.
 UART uses ASCII payloads framed as `payload*CCCC\n`, with CRC-16/CCITT-FALSE
 (initial 0xFFFF, polynomial 0x1021); replies are plain ASCII. Commands are HELLO,
 LOAD count, E index due_us dx dy buttons wheel, RUN, PING and IDENTITY. IDENTITY
-returns the configured VID/PID, release and strings over UART; receiver-side
+returns the configured VID/PID, release, strings and USB interface profile over UART; receiver-side
 enumeration is still needed to verify the host-visible fingerprint. A plain STOP line
 is always accepted. Reports are loaded and acknowledged before RUN. Each event
-must be ordered, in range and at least 1 ms after its predecessor; the last
+must be ordered, in range and at least 10 ms after its predecessor; the last
 report must release all buttons. CRC, parser, USB, watchdog or switch errors
 discard the loaded plan. CRC detects transmission corruption, not authorization;
 the UART connection is a trusted local control channel.
+
+The UART handshake is now `OK HELLO 2 4096 10000 60000000 1500 USB=1` when
+connected. Update both sender and firmware together; the sender refuses the
+previous v1/16-bit firmware instead of uploading an incompatible plan.
 
 ## Check from the receiving computer
 
@@ -176,7 +185,10 @@ Windows snapshot's reconstructed report covers the selected collection only.
 Snapshots include VID/PID, device release, strings, serial presence, bus type,
 usage, interface number, report fingerprint, field sizes/ranges and relative
 flags. Windows also reads the selected physical device's PnP subtree and driver
-services. Linux additionally reads cached USB configuration, interface and
+services and queries the selected USB device through its parent hub for
+configuration/interface/endpoint descriptors, speed, EP0 size, release,
+serial presence and extra USB strings. The hub query is guarded by VID/PID and
+does not detach drivers or send SET/feature/output requests. Linux reads cached USB configuration, interface and
 endpoint descriptors (including polling intervals) and speed through sysfs.
 macOS captures HID identity and report descriptors where the OS permits access.
 An access failure becomes a reported limitation; the checker never detaches
@@ -207,18 +219,34 @@ Logitech documents this VID/PID for the basic wired
 [M105](https://support.logi.com/hc/de/articles/360023306434-M105-Technical-Specifications).
 The identity is explicitly set in `esp32_mouse/config.h` before USB starts,
 so the selected Arduino board's Espressif defaults cannot override it.
-Release remains 0x0100 and the test serial is `000000000001`, rather than
-the ESP32 MAC/OUI. This serial is not copied from an individual commercial unit.
-Use `replay.py --port COM3 --probe --identity` to inspect these configured values.
+The [receiver investigation](../reports/2026-10-10-hid-investigation/README.md)
+showed that changing only these strings and IDs left a readily distinguishable
+TinyUSB interface. `usb_profile.h` now owns the pinned core's weak descriptor
+callbacks; no installed core patch or special linker flags are needed. The
+host-visible device has no serial (iSerialNumber = 0), no configuration/interface
+strings, one 4-byte interrupt IN endpoint at 0x81 with a 10 ms interval, and
+boot mouse subclass/protocol 1/2. There is no interrupt OUT endpoint.
+`GET_REPORT` returns button state with zero relative deltas, so querying state
+cannot repeat movement; boot protocol drops the wheel byte. Nonzero `SET_IDLE`
+rates repeat stationary state while idle, without replaying prior motion.
 
-This is an identity test, not a complete M105 clone. Logitech specifies a
-low-speed USB device; the S3 firmware uses its native full-speed USB peripheral.
-The relay retains 16-bit axes and report ID 1; report topology, endpoint timing,
-serial presence, version, USB request behavior and firmware remain independently
-observable. Replug native USB after flashing to force fresh receiver enumeration,
-then take a new snapshot on the receiving computer. Previously saved snapshots
-do not update themselves. Matching IDs and strings alone does not prove that
-the mouse is indistinguishable from the commercial model.
+Release 0x7200 and the endpoint/interface choices follow the comparison
+[C077 capture](https://forums.developer.nvidia.com/t/nano-configfs-custom-usb-mouse-device-works-for-a-windows-host-but-not-a-linux-host/190998).
+This is one hardware revision, not a specification for every M105. That capture
+does not contain the raw report descriptor. Our 52-byte standard descriptor is
+authored, not cloned; the capture advertises 46 bytes. These lengths are different.
+Use `replay.py --port COM3 --probe --identity` to inspect the configured values.
+
+This is still not an indistinguishable M105 clone. The commercial sample is
+low-speed (1.5 Mbps) with 8-byte EP0; this S3 build remains full-speed (12 Mbps)
+with the pinned stack's actual 64-byte EP0. Advertising a smaller EP0 without
+rebuilding/reconfiguring the stack would misdescribe its transfer behavior.
+USB request responses, report bytes, electrical behavior, idle/motion timing and
+firmware can also differ. Replug native USB after flashing to force fresh receiver
+enumeration, then take a new snapshot with the updated checker on the receiving
+computer. Previously saved snapshots do not update themselves. Older Windows
+snapshots lack hub-level evidence; missing evidence is reported as unknown rather
+than treated as a device difference.
 
 The previous project profile can be restored in `config.h` with VID 0x303A,
 PID 0x1001, manufacturer `Mouse Generator Project` and product
@@ -226,12 +254,11 @@ PID 0x1001, manufacturer `Mouse Generator Project` and product
 assignment are explained by [USB-IF](https://www.usb.org/getting-vendor-id);
 public catalog entries are not an assignment to this project for distribution.
 
-The pinned Arduino HID backend itself creates IN and OUT interrupt endpoints,
-a `TinyUSB HID` interface string and a 1 ms advertised interval; see
-[Espressif's implementation](https://github.com/espressif/arduino-esp32/blob/3.3.8/libraries/USB/src/USBHID.cpp).
-The application advertises only a mouse HID collection, but those USB topology
-details can differ from commercial mice. Firmware makes no claim of universal
-indistinguishability.
+The generic Arduino `USBHID` wrapper is deliberately not linked in this build;
+its default IN/OUT endpoints and TinyUSB strings are no longer the application
+descriptors. The USB stack itself is still TinyUSB; removing its strings is not
+authentication or proof of commercial origin. Firmware makes no claim of
+universal indistinguishability.
 
 Run `python -m unittest test_hardware -v` for count conversion, framing,
 transport failure handling, report layout and comparison semantics.

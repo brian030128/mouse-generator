@@ -177,6 +177,8 @@ def windows_topology(path):
         root = parent
         if parent_id.upper().startswith("USB\\") and "&MI_" not in parent_id.upper():
             break
+    root_id = instance_id(root)
+    usb_address = None
     rows, pending, visited = [], [root.value], set()
     while pending:
         node = pending.pop()
@@ -193,6 +195,8 @@ def windows_topology(path):
                     return None
             rows.append({"class_guid": value("ClassGUID"), "service": value("Service"),
                          "name": value("FriendlyName") or value("DeviceDesc")})
+            if node == root.value:
+                usb_address = value("Address")
         child = w.DWORD()
         if not cm.CM_Get_Child(c.byref(child), node, 0):
             while True:
@@ -201,7 +205,114 @@ def windows_topology(path):
                 if cm.CM_Get_Sibling(c.byref(sibling), child, 0):
                     break
                 child = sibling
-    return {"pnp_nodes": sorted(rows, key=lambda r: json.dumps(r, sort_keys=True))}
+    result = {"pnp_nodes": sorted(rows, key=lambda r: json.dumps(r, sort_keys=True))}
+    usb_id = re.match(r"USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", root_id, re.I)
+    if usb_id:
+        try:
+            hub = w.DWORD()
+            if cm.CM_Get_Parent(c.byref(hub), root, 0):
+                raise OSError("cannot locate USB parent hub")
+            result["usb"] = windows_usb_descriptors(instance_id(hub), usb_address,
+                                                    int(usb_id[1], 16), int(usb_id[2], 16))
+        except (OSError, ValueError) as exc:
+            result["usb_query_error"] = str(exc)
+    return result
+
+
+def windows_usb_descriptors(hub_id, port, vid, pid):
+    """Read only the selected USB device via its parent hub, guarded by VID/PID.
+
+    No driver detachment, SET requests, feature reports or hub-port writes.
+    """
+    import ctypes as c
+    from ctypes import wintypes as w
+    import struct
+    import uuid
+
+    if not isinstance(port, int) or not 1 <= port <= 255:
+        raise ValueError("selected device has no usable USB hub-port address")
+    cm = c.WinDLL("cfgmgr32")
+    k = c.WinDLL("kernel32", use_last_error=True)
+    guid = (c.c_byte * 16).from_buffer_copy(uuid.UUID("f18a0e88-c30c-11d0-8815-00a0c906bed8").bytes_le)
+    cm.CM_Get_Device_Interface_List_SizeW.argtypes = [c.POINTER(w.ULONG), c.c_void_p, w.LPCWSTR, w.ULONG]
+    cm.CM_Get_Device_Interface_ListW.argtypes = [c.c_void_p, w.LPCWSTR, w.LPWSTR, w.ULONG, w.ULONG]
+    size = w.ULONG()
+    if cm.CM_Get_Device_Interface_List_SizeW(c.byref(size), guid, hub_id, 0) or not size.value:
+        raise OSError("cannot resolve selected parent hub interface")
+    paths = c.create_unicode_buffer(size.value)
+    if cm.CM_Get_Device_Interface_ListW(guid, hub_id, paths, size.value, 0) or not paths.value:
+        raise OSError("cannot read selected parent hub interface")
+    k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+    k.CreateFileW.restype = w.HANDLE
+    k.DeviceIoControl.argtypes = [w.HANDLE, w.DWORD, c.c_void_p, w.DWORD, c.c_void_p,
+                                 w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+    k.DeviceIoControl.restype = w.BOOL
+    k.CloseHandle.argtypes = [w.HANDLE]
+    handle = k.CreateFileW(paths.value, 0x40000000, 3, None, 3, 0, None)
+    if handle == c.c_void_p(-1).value:
+        raise c.WinError(c.get_last_error())
+
+    def query(code, payload, length):
+        buf = c.create_string_buffer(length)
+        c.memmove(buf, payload, len(payload))
+        used = w.DWORD()
+        if not k.DeviceIoControl(handle, code, buf, length, buf, length, c.byref(used), None):
+            raise c.WinError(c.get_last_error())
+        return buf.raw[:used.value]
+
+    def descriptor(kind, index=0, language=0, length=255):
+        request = struct.pack("<IBBHHH", port, 0x80, 6, (kind << 8) | index, language, length)
+        return query(0x220410, request, 12 + length)[12:]
+
+    try:
+        info = query(0x220448, struct.pack("<I", port), 4096)
+        if len(info) < 24:
+            raise ValueError("truncated USB connection information")
+        device = info[4:22]
+        if device[:2] != b"\x12\x01" or (int.from_bytes(device[8:10], "little"),
+                                                   int.from_bytes(device[10:12], "little")) != (vid, pid):
+            raise ValueError("selected hub-port identity changed; query stopped")
+        header = descriptor(2, length=9)
+        if len(header) != 9 or header[:2] != b"\x09\x02":
+            raise ValueError("invalid USB configuration header")
+        length = int.from_bytes(header[2:4], "little")
+        if not 9 <= length <= 4096:
+            raise ValueError("unsupported USB configuration length")
+        config = descriptor(2, length=length)
+        if len(config) != length:
+            raise ValueError("truncated USB configuration")
+        return usb_hub_summary(device, config, info[23], descriptor)
+    finally:
+        k.CloseHandle(handle)
+
+
+def usb_hub_summary(device, config, speed_code, get_descriptor):
+    """Decode hub-query evidence, with strings but not individual serial values."""
+    if len(device) != 18 or len(config) < 9:
+        raise ValueError("truncated hub device/configuration descriptor")
+    result = usb_descriptor_summary(device + config)
+    result["speed_mbps"] = {0: "1.5", 1: "12", 2: "480", 3: "5000"}.get(speed_code)
+    result["device"].update({"release_number": int.from_bytes(device[12:14], "little"),
+                              "serial_present": bool(device[16])})
+    indices = {"manufacturer": device[14], "product": device[15], "configuration": config[6]}
+    position = 0
+    while position < len(config):
+        item = config[position:position + config[position]]
+        if item[1] == 4:
+            if len(item) < 9:
+                raise ValueError("truncated USB interface descriptor")
+            indices[f"interface_{item[2]}_{item[3]}"] = item[8]
+        position += len(item)
+    result["strings"] = {}
+    for name, index in indices.items():
+        if not index:
+            result["strings"][name] = None
+            continue
+        raw = get_descriptor(3, index, 0x0409)
+        if len(raw) < 2 or raw[1] != 3 or raw[0] < 2 or raw[0] > len(raw) or raw[0] % 2:
+            raise ValueError(f"invalid USB string descriptor: {name}")
+        result["strings"][name] = raw[2:raw[0]].decode("utf-16-le")
+    return result
 
 
 def enumerate_devices():
@@ -250,9 +361,13 @@ def snapshot(device):
                                       "it is not the original full USB report descriptor.")
         try:
             result["topology"] = windows_topology(result["path"])
+            error = result["topology"].pop("usb_query_error", None)
+            if error:
+                result["limitations"].append(f"USB hub descriptor query unavailable: {error}")
         except (OSError, ValueError) as exc:
             result["limitations"].append(f"PnP sibling query unavailable ({type(exc).__name__}).")
-        result["limitations"].append("Windows snapshot does not collect USB endpoint intervals, speed or power.")
+        if not result["topology"] or "usb" not in result["topology"]:
+            result["limitations"].append("USB endpoint intervals, speed, power and extra strings unavailable.")
     elif sys.platform != "linux":
         result["limitations"].append("USB endpoint topology is unavailable on this platform.")
     return result
@@ -280,7 +395,12 @@ def compare(reference, candidate):
     else:
         unknown.append("descriptor (unavailable or different acquisition methods)")
     if reference.get("host", {}).get("system") == candidate.get("host", {}).get("system"):
-        check("topology", reference.get("topology"), candidate.get("topology"))
+        a, b = reference.get("topology"), candidate.get("topology")
+        if isinstance(a, dict) and isinstance(b, dict):
+            for key in sorted(a.keys() | b.keys()):
+                check(f"topology.{key}", a.get(key), b.get(key))
+        else:
+            unknown.append("topology (unavailable)")
     else:
         unknown.append("topology (different host platforms)")
     return {"verdict": "observable_differences" if differences else "inconclusive",

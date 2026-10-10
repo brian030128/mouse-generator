@@ -9,7 +9,7 @@ constexpr unsigned long CONTROL_BAUD = 115200;
 constexpr int STOP_PIN = 4;
 constexpr unsigned MAX_EVENTS = 4096;
 constexpr unsigned MAX_DURATION_US = 60000000;
-constexpr unsigned MIN_GAP_US = 1000;
+constexpr unsigned MIN_GAP_US = 10000;
 constexpr unsigned WATCHDOG_MS = 1500;
 constexpr unsigned MAX_LATENESS_US = 20000;
 
@@ -18,9 +18,7 @@ constexpr unsigned MAX_LATENESS_US = 20000;
 // This changes enumeration identity; it is not a complete M105 implementation.
 constexpr uint16_t MOUSE_USB_VID = 0x046D;
 constexpr uint16_t MOUSE_USB_PID = 0xC077;
-constexpr uint16_t MOUSE_DEVICE_RELEASE = 0x0100;
+// Revision from the comparison capture, not a specification for every M105.
+constexpr uint16_t MOUSE_DEVICE_RELEASE = 0x7200;
 constexpr char PRODUCT_NAME[] = "USB Optical Mouse";
 constexpr char MANUFACTURER_NAME[] = "Logitech";
-// Explicitly avoid publishing the ESP32's MAC/OUI as the USB serial number.
-// This test serial is not copied from a physical mouse.
-constexpr char MOUSE_USB_SERIAL[] = "000000000001";
