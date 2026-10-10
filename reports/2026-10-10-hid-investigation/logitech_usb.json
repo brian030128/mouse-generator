@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "captured_utc": "2026-10-10T07:32:27.122924+00:00",
+  "host": {
+    "system": "Windows",
+    "release": "11"
+  },
+  "identity": {
+    "vendor_id": 1133,
+    "product_id": 49271,
+    "release_number": 256,
+    "manufacturer_string": "Logitech",
+    "product_string": "USB Optical Mouse",
+    "usage_page": 1,
+    "usage": 2,
+    "interface_number": 0,
+    "bus_type": 1
+  },
+  "serial_number": "000000000001",
+  "path": "\\\\?\\HID#VID_046D&PID_C077#6&1e1472c&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+  "descriptor": {
+    "source": "windows-reconstructed",
+    "bytes": 66,
+    "hex": "05010902a1010901a10085010509190129031500250175019503810275059501810305010930093116018026ff7f75109502810609381581257f750895018106c0c0",
+    "sha256": "1f59e034f41531715ed80f9ae866eae41f83409e6af49daff2dbbe87f7284627",
+    "summary": {
+      "collections": [
+        {
+          "type": 1,
+          "usage_page": 1,
+          "usages": [
+            2
+          ]
+        },
+        {
+          "type": 0,
+          "usage_page": 1,
+          "usages": [
+            1
+          ]
+        }
+      ],
+      "reports": [
+        {
+          "type": "input",
+          "report_id": 1,
+          "payload_bits": 48,
+          "wire_bytes": 7
+        }
+      ],
+      "fields": [
+        {
+          "type": "input",
+          "report_id": 1,
+          "usage_page": 9,
+          "usages": [],
+          "usage_min": 1,
+          "usage_max": 3,
+          "bits": 1,
+          "count": 3,
+          "logical_min": 0,
+          "logical_max": 1,
+          "constant": false,
+          "relative": false,
+          "flags": 2
+        },
+        {
+          "type": "input",
+          "report_id": 1,
+          "usage_page": 9,
+          "usages": [],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 5,
+          "count": 1,
+          "logical_min": 0,
+          "logical_max": 1,
+          "constant": true,
+          "relative": false,
+          "flags": 3
+        },
+        {
+          "type": "input",
+          "report_id": 1,
+          "usage_page": 1,
+          "usages": [
+            48,
+            49
+          ],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 16,
+          "count": 2,
+          "logical_min": -32767,
+          "logical_max": 32767,
+          "constant": false,
+          "relative": true,
+          "flags": 6
+        },
+        {
+          "type": "input",
+          "report_id": 1,
+          "usage_page": 1,
+          "usages": [
+            56
+          ],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 8,
+          "count": 1,
+          "logical_min": -127,
+          "logical_max": 127,
+          "constant": false,
+          "relative": true,
+          "flags": 6
+        }
+      ]
+    }
+  },
+  "topology": {
+    "pnp_nodes": [
+      {
+        "class_guid": "{4d36e96f-e325-11ce-bfc1-08002be10318}",
+        "service": "mouhid",
+        "name": "@msmouse.inf,%hid.mousedevice%;HID-compliant mouse"
+      },
+      {
+        "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}",
+        "service": "HidUsb",
+        "name": "@input.inf,%hid.devicedesc%;USB Input Device"
+      }
+    ]
+  },
+  "limitations": [
+    "No motion, timing, firmware, USB electrical or application-specific detection test.",
+    "A difference identifies two fingerprints; it does not classify authenticity.",
+    "Windows HIDAPI reconstructs the selected collection's descriptor; it is not the original full USB report descriptor.",
+    "Windows snapshot does not collect USB endpoint intervals, speed or power."
+  ]
+}

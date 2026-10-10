@@ -1,0 +1,239 @@
+﻿{
+    "captured_at":  "2026-10-10T15:35:28.6059872+08:00",
+    "usb_properties":  [
+                           {
+                               "KeyName":  "DEVPKEY_Device_HardwareIds",
+                               "Data":  [
+                                            "USB\\VID_046D\u0026PID_C077\u0026REV_0100",
+                                            "USB\\VID_046D\u0026PID_C077"
+                                        ]
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_CompatibleIds",
+                               "Data":  [
+                                            "USB\\COMPAT_VID_046D\u0026Class_03\u0026SubClass_00\u0026Prot_00",
+                                            "USB\\COMPAT_VID_046D\u0026Class_03\u0026SubClass_00",
+                                            "USB\\COMPAT_VID_046D\u0026Class_03",
+                                            "USB\\Class_03\u0026SubClass_00\u0026Prot_00",
+                                            "USB\\Class_03\u0026SubClass_00",
+                                            "USB\\Class_03"
+                                        ]
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_LocationInfo",
+                               "Data":  "Port_#0001.Hub_#0001"
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_Address",
+                               "Data":  1
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_Parent",
+                               "Data":  "USB\\ROOT_HUB30\\4\u00262fd48294\u00260\u00260"
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_BusReportedDeviceDesc",
+                               "Data":  "USB Optical Mouse"
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_PhysicalDeviceLocation",
+                               "Data":  [
+                                            1,
+                                            0,
+                                            0,
+                                            0,
+                                            8,
+                                            0,
+                                            3,
+                                            0,
+                                            1,
+                                            4,
+                                            128,
+                                            8,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            255,
+                                            255,
+                                            255,
+                                            255
+                                        ]
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_InstallDate",
+                               "Data":  "\/Date(1791617349170)\/"
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_FirstInstallDate",
+                               "Data":  "\/Date(1791617349170)\/"
+                           },
+                           {
+                               "KeyName":  "DEVPKEY_Device_LocationPaths",
+                               "Data":  [
+                                            "PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(1)",
+                                            "ACPI(_SB_)#ACPI(PC00)#ACPI(XHCI)#ACPI(RHUB)#ACPI(HS01)"
+                                        ]
+                           }
+                       ],
+    "mx_properties":  [
+                          {
+                              "KeyName":  "DEVPKEY_Device_Manufacturer",
+                              "Data":  "Microsoft"
+                          },
+                          {
+                              "KeyName":  "DEVPKEY_Device_Parent",
+                              "Data":  "BTH\\MS_BTHLE\\6\u002629d56e15\u00261\u00263"
+                          },
+                          {
+                              "KeyName":  "DEVPKEY_Device_BusReportedDeviceDesc",
+                              "Data":  "Bluetooth LE Device d1b58b2d90bd"
+                          },
+                          {
+                              "KeyName":  "DEVPKEY_Device_InstallDate",
+                              "Data":  "\/Date(1750659456821)\/"
+                          },
+                          {
+                              "KeyName":  "DEVPKEY_Device_FirstInstallDate",
+                              "Data":  "\/Date(1750659456821)\/"
+                          }
+                      ],
+    "drivers":  [
+                    {
+                        "DeviceName":  "HID-compliant mouse",
+                        "DeviceID":  "HID\\VID_046D\u0026PID_C077\\6\u00261E1472C\u00260\u00260000",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.1150",
+                        "IsSigned":  true,
+                        "InfName":  "msmouse.inf"
+                    },
+                    {
+                        "DeviceName":  "USB Input Device",
+                        "DeviceID":  "USB\\VID_046D\u0026PID_C077\\000000000001",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "input.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth LE Generic Attribute Service",
+                        "DeviceID":  "BTHLEDEVICE\\{00010000-0000-1000-8000-011F2000046D}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u00260041",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Logitech Download Assistant",
+                        "DeviceID":  "HID\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\u0026COL03\\9\u002636CB33B4\u00260\u00260002",
+                        "DriverProviderName":  "Logitech",
+                        "DriverVersion":  "1.10.95.0",
+                        "IsSigned":  true,
+                        "InfName":  "oem36.inf"
+                    },
+                    {
+                        "DeviceName":  "HID-compliant mouse",
+                        "DeviceID":  "HID\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\u0026COL02\\9\u002636CB33B4\u00260\u00260001",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.1150",
+                        "IsSigned":  true,
+                        "InfName":  "msmouse.inf"
+                    },
+                    {
+                        "DeviceName":  "HID Keyboard Device",
+                        "DeviceID":  "HID\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\u0026COL01\\9\u002636CB33B4\u00260\u00260000",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.8972",
+                        "IsSigned":  true,
+                        "InfName":  "keyboard.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth Low Energy GATT compliant HID device",
+                        "DeviceID":  "BTHLEDEVICE\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u00260021",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "hidbthle.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth LE Generic Attribute Service",
+                        "DeviceID":  "BTHLEDEVICE\\{0000180F-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u0026001D",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Device Information Service",
+                        "DeviceID":  "BTHLEDEVICE\\{0000180A-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u0026000E",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Generic Attribute Profile",
+                        "DeviceID":  "BTHLEDEVICE\\{00001801-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u0026000A",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Generic Access Profile",
+                        "DeviceID":  "BTHLEDEVICE\\{00001800-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BD\\8\u00261715847\u00260\u00260001",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth LE Generic Attribute Service",
+                        "DeviceID":  "BTHLEDEVICE\\{00010000-0000-1000-8000-011F2000046D}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u00260041",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth Low Energy GATT compliant HID device",
+                        "DeviceID":  "BTHLEDEVICE\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u00260021",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "hidbthle.inf"
+                    },
+                    {
+                        "DeviceName":  "Bluetooth LE Generic Attribute Service",
+                        "DeviceID":  "BTHLEDEVICE\\{0000180F-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u0026001D",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Device Information Service",
+                        "DeviceID":  "BTHLEDEVICE\\{0000180A-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u0026000E",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Generic Attribute Profile",
+                        "DeviceID":  "BTHLEDEVICE\\{00001801-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u0026000A",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    },
+                    {
+                        "DeviceName":  "Generic Access Profile",
+                        "DeviceID":  "BTHLEDEVICE\\{00001800-0000-1000-8000-00805F9B34FB}_DEV_VID\u002602046D_PID\u0026B023_REV\u00260015_D1B58B2D90BB\\8\u002622FDD603\u00260\u00260001",
+                        "DriverProviderName":  "Microsoft",
+                        "DriverVersion":  "10.0.26100.9549",
+                        "IsSigned":  true,
+                        "InfName":  "bthleenum.inf"
+                    }
+                ]
+}

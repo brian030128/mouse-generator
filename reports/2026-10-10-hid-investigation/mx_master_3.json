@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "captured_utc": "2026-10-10T07:32:27.210079+00:00",
+  "host": {
+    "system": "Windows",
+    "release": "11"
+  },
+  "identity": {
+    "vendor_id": 1133,
+    "product_id": 45091,
+    "release_number": 21,
+    "manufacturer_string": "Logitech",
+    "product_string": "MX_Master_3",
+    "usage_page": 1,
+    "usage": 2,
+    "interface_number": -1,
+    "bus_type": 2
+  },
+  "serial_number": "d1b58b2d90bd",
+  "path": "\\\\?\\HID#{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02046d_PID&b023_REV&0015_d1b58b2d90bd&Col02#9&36cb33b4&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+  "descriptor": {
+    "source": "windows-reconstructed",
+    "bytes": 75,
+    "hex": "05010902a1010901a1008502050919012910150025017501951081020501093009311601f826ff07750c9502810609381581257f750895018106050c0a38021581257f750895018106c0c0",
+    "sha256": "760083dd5f125468766b6be837cddd9e7026018d77ffa31a0139a92d797d33bd",
+    "summary": {
+      "collections": [
+        {
+          "type": 1,
+          "usage_page": 1,
+          "usages": [
+            2
+          ]
+        },
+        {
+          "type": 0,
+          "usage_page": 1,
+          "usages": [
+            1
+          ]
+        }
+      ],
+      "reports": [
+        {
+          "type": "input",
+          "report_id": 2,
+          "payload_bits": 56,
+          "wire_bytes": 8
+        }
+      ],
+      "fields": [
+        {
+          "type": "input",
+          "report_id": 2,
+          "usage_page": 9,
+          "usages": [],
+          "usage_min": 1,
+          "usage_max": 16,
+          "bits": 1,
+          "count": 16,
+          "logical_min": 0,
+          "logical_max": 1,
+          "constant": false,
+          "relative": false,
+          "flags": 2
+        },
+        {
+          "type": "input",
+          "report_id": 2,
+          "usage_page": 1,
+          "usages": [
+            48,
+            49
+          ],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 12,
+          "count": 2,
+          "logical_min": -2047,
+          "logical_max": 2047,
+          "constant": false,
+          "relative": true,
+          "flags": 6
+        },
+        {
+          "type": "input",
+          "report_id": 2,
+          "usage_page": 1,
+          "usages": [
+            56
+          ],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 8,
+          "count": 1,
+          "logical_min": -127,
+          "logical_max": 127,
+          "constant": false,
+          "relative": true,
+          "flags": 6
+        },
+        {
+          "type": "input",
+          "report_id": 2,
+          "usage_page": 12,
+          "usages": [
+            568
+          ],
+          "usage_min": null,
+          "usage_max": null,
+          "bits": 8,
+          "count": 1,
+          "logical_min": -127,
+          "logical_max": 127,
+          "constant": false,
+          "relative": true,
+          "flags": 6
+        }
+      ]
+    }
+  },
+  "topology": {
+    "pnp_nodes": [
+      {
+        "class_guid": "{4d36e96b-e325-11ce-bfc1-08002be10318}",
+        "service": "kbdhid",
+        "name": "@keyboard.inf,%hid.keyboarddevice%;HID Keyboard Device"
+      },
+      {
+        "class_guid": "{4d36e96f-e325-11ce-bfc1-08002be10318}",
+        "service": "mouhid",
+        "name": "@msmouse.inf,%hid.mousedevice%;HID-compliant mouse"
+      },
+      {
+        "class_guid": "{5c4c3332-344d-483c-8739-259e934c9cc8}",
+        "service": null,
+        "name": "@oem85.inf,%devicename%;Logi Download Assistant"
+      },
+      {
+        "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}",
+        "service": "mshidumdf",
+        "name": "@hidbthle.inf,%hidbthle%;Bluetooth Low Energy GATT compliant HID device"
+      },
+      {
+        "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}",
+        "service": null,
+        "name": "@oem36.inf,%hpps.desc%;Logitech Download Assistant"
+      }
+    ]
+  },
+  "limitations": [
+    "No motion, timing, firmware, USB electrical or application-specific detection test.",
+    "A difference identifies two fingerprints; it does not classify authenticity.",
+    "Windows HIDAPI reconstructs the selected collection's descriptor; it is not the original full USB report descriptor.",
+    "Windows snapshot does not collect USB endpoint intervals, speed or power."
+  ]
+}
