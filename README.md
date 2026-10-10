@@ -1,5 +1,11 @@
 # Recorder
 
+ESP32-S3 USB mouse output is available through `replay.py` and the firmware in
+`firmware/esp32_mouse/`. See [the wiring, flashing and replay guide](firmware/README.md)
+for the two-computer setup. Run `hid_check.py` on the receiving computer to
+capture and compare its observable HID fingerprint with a commercial mouse.
+Standard HID compatibility does not guarantee that devices are indistinguishable.
+
 A Windows and macOS desktop mouse recorder using Python's standard library. No
 packages need installing. Data stays in a local SQLite database.
 

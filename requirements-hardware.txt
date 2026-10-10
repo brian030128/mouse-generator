@@ -1,0 +1,3 @@
+# Separate from the recorder's dependency-free setup.
+pyserial==3.5
+hidapi==0.15.0
