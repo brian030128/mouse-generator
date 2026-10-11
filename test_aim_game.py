@@ -21,10 +21,20 @@ def target(spawn_ms=0):
     return Target(300, 300, 15, round(spawn_ms * MS), AREA)
 
 
+class FixedWindow:
+    def __init__(self, ns):
+        self.ns = ns
+
+    def randint(self, low, high):
+        return self.ns
+
+
 class TrialTests(unittest.TestCase):
     def setUp(self):
         self.saved = []
-        self.collector = TrialCollector(lambda events, t: self.saved.append((events, t)))
+        self.collector = TrialCollector(
+            lambda events, t, full: self.saved.append((events, t, full)),
+            rng=FixedWindow(180 * MS))
         self.collector.arm(target())
 
     def feed(self, *events):
@@ -36,10 +46,26 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(self.saved[0][0], [move(10), move(50, 250, 260), click(209)])
         self.assertIsNone(self.collector.target)
 
-    def test_200_ms_or_more_is_too_slow(self):
-        self.assertEqual(self.feed(move(10), click(210))[-1], "slow")
-        self.assertEqual(self.collector.last_duration_ns, 200 * MS)
+    def test_200_ms_or_more_keeps_last_window_from_first_move_in_it(self):
+        self.assertEqual(self.feed(move(10), move(25), move(40), click(220))[-1], "trimmed")
+        self.assertEqual(self.collector.last_duration_ns, 210 * MS)
+        self.assertEqual(self.saved[0][0], [move(40), click(220)])
+        self.assertEqual(self.saved[0][2], 210 * MS)
+
+    def test_trim_window_is_drawn_between_150_and_250_ms(self):
+        collector = TrialCollector(lambda *args: None)
+        draws = {collector.rng.randint(*collector.trim_window_ns) for _ in range(500)}
+        self.assertGreaterEqual(min(draws), 150 * MS)
+        self.assertLessEqual(max(draws), 250 * MS)
+        self.assertGreater(len(draws), 400)
+
+    def test_slow_hit_with_no_movement_in_window_is_dropped(self):
+        self.assertEqual(self.feed(move(10), click(500))[-1], "slow")
         self.assertEqual(self.saved, [])
+
+    def test_trim_does_not_start_on_a_button_event(self):
+        self.feed(move(10), click(100, button="right"), move(150), click(250))
+        self.assertEqual(self.saved[0][0], [move(150), click(250)])
 
     def test_click_off_the_dot_is_a_miss(self):
         self.assertEqual(self.feed(move(10), click(50, 320, 300))[-1], "missed")
@@ -79,12 +105,13 @@ class AimDatabaseTests(unittest.TestCase):
             database = AimDatabase(path)
             session = database.start_session("aim", 200 * MS, (0, 0, 1920, 1080), "win32")
             events = [move(130), click(250)]
-            segment = database.save_trial(session, 0, events, target(spawn_ms=100), 1.0)
+            segment = database.save_trial(session, 0, events, target(spawn_ms=100),
+                                          300 * MS, 1.0)
             database.close()
             database = AimDatabase(path)
             self.assertEqual(database.count_segments(), 1)
             self.assertEqual(database.connection.execute("SELECT * FROM targets").fetchall(),
-                             [(segment, 300, 300, 15, -30 * MS)])
+                             [(segment, 300, 300, 15, -30 * MS, 300 * MS)])
             self.assertEqual(database.connection.execute(
                 "SELECT duration_ns, event_count FROM segments").fetchall(), [(120 * MS, 2)])
             database.close()

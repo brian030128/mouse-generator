@@ -172,9 +172,12 @@ as fast as you can. Close the window to stop.
 - An attempt starts at the first mouse movement after the dot appears and
   ends at the next left-click. Movement delivered before the dot was drawn is
   ignored.
-- It is saved only if the click lands on the dot **and** movement onset to
-  click took **under 200 ms**. Misses, slow hits and clicks without movement
-  are discarded, and a new dot appears either way (at least 60 px from the last).
+- It is saved only if the click lands on the dot. If movement onset to click
+  took **200 ms or more**, only the last 150–250 ms before the click (length
+  drawn at random each time) is kept, starting at the first movement in that
+  window; if that window holds no movement, the hit is discarded. Misses and
+  clicks without movement are discarded. A new dot appears either way (at
+  least 60 px from the last).
 - A click outside the 500x500 area (another app, the title bar) discards the
   movement but keeps the same dot.
 
@@ -184,8 +187,11 @@ backend, coordinates and `sessions`/`segments`/`events` schema (sessions
 labelled `aim`), so the generator tools accept it with `--db data/aim.sqlite3`.
 An extra `targets` table gives each saved segment's dot: centre `x`/`y` in
 screen coordinates, `radius`, and `spawn_offset_ns`, when the dot appeared
-relative to the segment's first event (negative; its magnitude is the reaction
-time before moving).
+relative to the segment's first event (negative; for untrimmed hits its
+magnitude is the reaction time before moving), and `full_duration_ns`, the
+whole attempt's duration from movement onset to click (larger than the
+segment's own duration when it was trimmed; NULL for hits saved before
+trimming was added).
 
 ```powershell
 python aim_game.py --max-ms 250 --radius 10   # change the time limit or dot size

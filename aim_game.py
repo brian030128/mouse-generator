@@ -1,4 +1,4 @@
-"""Aim-game recorder: click random dots in a 500x500 window; only fast hits are saved.
+"""Aim-game recorder: click random dots in a 500x500 window; hits are saved, slow ones trimmed.
 
 Run with `python aim_game.py`; Windows or macOS, Python 3.10+, no dependencies.
 Saves to its own database (data/aim.sqlite3), separate from the everyday recorder.
@@ -20,6 +20,7 @@ from storage import Database
 SIZE = 500
 RADIUS = 15
 MAX_DURATION_NS = 200_000_000
+TRIM_WINDOW_NS = (150_000_000, 250_000_000)
 MIN_JUMP = 60
 MACOS = sys.platform == "darwin"
 FONT = ("Helvetica Neue", 13) if MACOS else ("Segoe UI", 10)
@@ -44,17 +45,22 @@ class Target:
 class TrialCollector:
     """One attempt per dot: first movement after the dot appears, to the next left-click.
 
-    The attempt is saved only when the click lands on the dot and the time from
-    movement onset to the click is under max_duration_ns. Clicks outside the play
-    area discard the movement but keep the same dot.
+    The attempt is saved only when the click lands on the dot. A hit taking
+    max_duration_ns or longer from movement onset to click keeps only the last
+    150-250 ms (drawn uniformly) before the click, starting at the first movement
+    in that window. Clicks outside the play area discard the movement but keep
+    the same dot.
     """
 
-    def __init__(self, save, max_duration_ns=MAX_DURATION_NS):
+    def __init__(self, save, max_duration_ns=MAX_DURATION_NS, trim_window_ns=TRIM_WINDOW_NS,
+                 rng=None):
         self.save = save
         self.max_duration_ns = max_duration_ns
+        self.trim_window_ns = trim_window_ns
+        self.rng = rng or random.Random()
         self.target = None
         self.events = []
-        self.counts = {"saved": 0, "slow": 0, "missed": 0, "outside": 0}
+        self.counts = {"saved": 0, "trimmed": 0, "slow": 0, "missed": 0, "outside": 0}
         self.last_duration_ns = None
 
     def arm(self, target):
@@ -83,10 +89,19 @@ class TrialCollector:
             self.events.append(event)
             self.last_duration_ns = event.timestamp_ns - self.events[0].timestamp_ns
             if self.last_duration_ns < self.max_duration_ns:
-                self.save(list(self.events), target)
+                self.save(list(self.events), target, self.last_duration_ns)
                 outcome = "saved"
             else:
-                outcome = "slow"
+                cutoff = event.timestamp_ns - self.rng.randint(*self.trim_window_ns)
+                kept = [e for e in self.events if e.timestamp_ns >= cutoff]
+                # A trajectory starts at movement, as in the everyday recorder.
+                while kept and kept[0].kind != "move":
+                    kept.pop(0)
+                if kept:
+                    self.save(kept, target, self.last_duration_ns)
+                    outcome = "trimmed"
+                else:
+                    outcome = "slow"
         self.counts[outcome] += 1
         self.events = []
         if outcome != "outside":
@@ -108,14 +123,18 @@ class AimDatabase(Database):
                 spawn_offset_ns INTEGER NOT NULL
             )
         """)
+        # Added with trimming; rows saved before it stay NULL (they were never trimmed).
+        self._add_column("targets", "full_duration_ns", "INTEGER")
 
-    def save_trial(self, session_id, recording_start_ns, events, target, pixel_scale=None):
+    def save_trial(self, session_id, recording_start_ns, events, target,
+                   full_duration_ns=None, pixel_scale=None):
         segment_id = self.save_segment(session_id, recording_start_ns, events, pixel_scale)
         with self.connection:
             self.connection.execute(
-                "INSERT INTO targets VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO targets(segment_id, x, y, radius, spawn_offset_ns, full_duration_ns) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (segment_id, target.x, target.y, target.radius,
-                 target.spawn_ns - events[0].timestamp_ns))
+                 target.spawn_ns - events[0].timestamp_ns, full_duration_ns))
         return segment_id
 
 
@@ -139,7 +158,7 @@ class AimGame:
                                 highlightthickness=0, cursor="crosshair")
         self.canvas.pack()
         root.bind("<Configure>", self.moved)
-        self.result = tk.StringVar(value=f"Click each dot in under {max_duration_ns // 1_000_000} ms")
+        self.result = tk.StringVar(value=f"Click each dot; hits over {max_duration_ns // 1_000_000} ms are trimmed")
         self.result_label = tk.Label(root, textvariable=self.result, font=FONT, anchor="w", padx=8)
         self.result_label.pack(fill="x")
         self.counts = tk.StringVar()
@@ -190,17 +209,18 @@ class AimGame:
         if self.collector.target is not None:
             self.collector.target = self.locate(self.collector.target.spawn_ns)
 
-    def save(self, events, target):
+    def save(self, events, target, full_duration_ns):
         first = events[0]
         self.database.save_trial(self.session_id, self.recording_start_ns, events, target,
-                                 pixel_scale_at(first.x, first.y))
+                                 full_duration_ns, pixel_scale_at(first.x, first.y))
         self.total_segments += 1
 
     def report(self, outcome):
         ms = (self.collector.last_duration_ns or 0) / 1e6
         text, colour = {
             "saved": (f"{ms:.0f} ms — saved", "#2e9d4f"),
-            "slow": (f"{ms:.0f} ms — too slow, not saved", "#c0392b"),
+            "trimmed": (f"{ms:.0f} ms — saved the last 150–250 ms", "#b7791f"),
+            "slow": (f"{ms:.0f} ms — no movement near the click, not saved", "#c0392b"),
             "missed": ("Missed — not saved", "#c0392b"),
             "outside": ("Clicked outside the game — same dot", "gray"),
         }[outcome]
@@ -210,7 +230,7 @@ class AimGame:
 
     def update_counts(self):
         c = self.collector.counts
-        self.counts.set(f"Saved {c['saved']}    Too slow {c['slow']}    Missed {c['missed']}"
+        self.counts.set(f"Saved {c['saved']}    Trimmed {c['trimmed']}    Missed {c['missed']}"
                         f"    Total saved: {self.total_segments:,}")
 
     def tick(self):
@@ -263,7 +283,7 @@ def main():
     parser.add_argument("--db", type=Path,
                         default=Path(__file__).resolve().parent / "data" / "aim.sqlite3")
     parser.add_argument("--max-ms", type=int, default=MAX_DURATION_NS // 1_000_000,
-                        help="Save hits faster than this (default 200)")
+                        help="Trim hits that take this long or longer (default 200)")
     parser.add_argument("--radius", type=int, default=RADIUS, help="Dot radius in pixels")
     parser.add_argument("--export", type=Path, metavar="CSV", help="Export the database and exit")
     args = parser.parse_args()
