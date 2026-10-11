@@ -195,3 +195,13 @@ def pixel_scale_at(x, y):
         quartz.CGDisplayModeRelease(mode)
     points = quartz.CGDisplayBounds(display.value).width
     return pixels / points if points else None
+
+
+def move_cursor(x, y):
+    """Warps the cursor; a warp is not a HID event, so the event tap ignores it."""
+    quartz, _ = _libraries()
+    quartz.CGWarpMouseCursorPosition.argtypes = [CGPoint]
+    quartz.CGAssociateMouseAndMouseCursorPosition.argtypes = [ctypes.c_bool]
+    quartz.CGWarpMouseCursorPosition(CGPoint(x, y))
+    # Without this, macOS freezes the cursor for a moment after a warp.
+    quartz.CGAssociateMouseAndMouseCursorPosition(True)

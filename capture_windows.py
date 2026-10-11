@@ -128,3 +128,10 @@ def configure_desktop():
 def pixel_scale_at(x, y):
     # Per-monitor DPI awareness already reports physical pixels.
     return 1.0
+
+
+def move_cursor(x, y):
+    """Warps the cursor; injected, so the capture hook ignores the jump."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    if not user32.SetCursorPos(int(x), int(y)):
+        raise ctypes.WinError(ctypes.get_last_error())

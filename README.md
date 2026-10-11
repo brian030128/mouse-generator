@@ -176,8 +176,10 @@ as fast as you can. Close the window to stop.
   took **200 ms or more**, only the last 150–250 ms before the click (length
   drawn at random each time) is kept, starting at the first movement in that
   window; if that window holds no movement, the hit is discarded. Misses and
-  clicks without movement are discarded. A new dot appears either way (at
-  least 60 px from the last).
+  clicks without movement are discarded. A new dot appears either way.
+- Each new dot moves the cursor back to the middle of the play area, so every
+  attempt starts from the same point; dots appear at least 60 px from the
+  middle. The jump is injected by the program, so it is never recorded.
 - A click outside the 350x350 area (another app, the title bar) discards the
   movement but keeps the same dot.
 

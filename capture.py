@@ -7,6 +7,6 @@ from mouse_event import MouseEvent
 SUPPORTED = sys.platform in ("win32", "darwin")
 
 if sys.platform == "darwin":
-    from capture_macos import MouseCapture, configure_desktop, pixel_scale_at
+    from capture_macos import MouseCapture, configure_desktop, move_cursor, pixel_scale_at
 elif sys.platform == "win32":
-    from capture_windows import MouseCapture, configure_desktop, pixel_scale_at
+    from capture_windows import MouseCapture, configure_desktop, move_cursor, pixel_scale_at

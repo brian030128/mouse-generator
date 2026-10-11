@@ -14,7 +14,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox
 
-from capture import SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at
+from capture import SUPPORTED, MouseCapture, configure_desktop, move_cursor, pixel_scale_at
 from storage import Database
 
 SIZE = 350
@@ -185,11 +185,12 @@ class AimGame:
             messagebox.showerror("Cannot start recording", str(error))
 
     def spawn(self):
+        # Every attempt starts from the middle of the play area, so keep dots off it.
+        middle = SIZE // 2
         margin = self.radius + 5
-        for _ in range(100):
+        while True:
             centre = (random.randint(margin, SIZE - margin), random.randint(margin, SIZE - margin))
-            if self.centre is None or (centre[0] - self.centre[0]) ** 2 + \
-                    (centre[1] - self.centre[1]) ** 2 >= MIN_JUMP ** 2:
+            if (centre[0] - middle) ** 2 + (centre[1] - middle) ** 2 >= MIN_JUMP ** 2:
                 break
         self.centre = centre
         if self.dot is not None:
@@ -198,6 +199,9 @@ class AimGame:
         self.dot = self.canvas.create_oval(centre[0] - r, centre[1] - r, centre[0] + r,
                                            centre[1] + r, fill="#f2b134", outline="")
         self.root.update_idletasks()
+        # The warp is injected, so capture never records the jump; the attempt
+        # starts with the first real movement away from the middle.
+        move_cursor(self.canvas.winfo_rootx() + middle, self.canvas.winfo_rooty() + middle)
         self.collector.arm(self.locate(time.perf_counter_ns()))
 
     def locate(self, spawn_ns):
