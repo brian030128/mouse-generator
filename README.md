@@ -1,4 +1,9 @@
-# Recorder
+# Mouse movement generation
+
+Record mouse trajectories, train movement models, and generate paths as
+`[t_ms, x, y, click]` rows for use by other programs.
+
+## Recorder
 
 A Windows and macOS desktop mouse recorder using Python's standard library. No
 packages need installing. Data stays in a local SQLite database.
