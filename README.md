@@ -157,6 +157,37 @@ Segment estimates extrapolate the benchmark; allow additional disk space for
 SQLite's active WAL file and any CSV exports. A segment is a whole movement
 ending in a click, while an event is one position or button/wheel update.
 
+## Aim game recorder
+
+A second, separate way to collect data. On Windows **double-click
+`Start Aim Game.bat`** (macOS: `Start Aim Game.command`), or run
+`python aim_game.py`. A 500x500 window shows one dot at a time; click each dot
+as fast as you can. Close the window to stop.
+
+- An attempt starts at the first mouse movement after the dot appears and
+  ends at the next left-click. Movement delivered before the dot was drawn is
+  ignored.
+- It is saved only if the click lands on the dot **and** movement onset to
+  click took **under 200 ms**. Misses, slow hits and clicks without movement
+  are discarded, and a new dot appears either way (at least 60 px from the last).
+- A click outside the 500x500 area (another app, the title bar) discards the
+  movement but keeps the same dot.
+
+Data goes to `data/aim.sqlite3`, never to the everyday recorder's
+`data/mouse.sqlite3`, so the two datasets stay apart. It uses the same capture
+backend, coordinates and `sessions`/`segments`/`events` schema (sessions
+labelled `aim`), so the generator tools accept it with `--db data/aim.sqlite3`.
+An extra `targets` table gives each saved segment's dot: centre `x`/`y` in
+screen coordinates, `radius`, and `spawn_offset_ns`, when the dot appeared
+relative to the segment's first event (negative; its magnitude is the reaction
+time before moving).
+
+```powershell
+python aim_game.py --max-ms 250 --radius 10   # change the time limit or dot size
+python aim_game.py --export data/aim.csv
+python -m unittest test_aim_game -v
+```
+
 ## Trajectory generator
 
 `generator/` trains a model on the recorded segments and samples new

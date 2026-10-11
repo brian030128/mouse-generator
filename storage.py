@@ -94,6 +94,7 @@ class Database:
                 [(result.lastrowid, i, e.timestamp_ns - start, e.x, e.y,
                   e.kind, e.button, e.wheel_delta) for i, e in enumerate(events)],
             )
+        return result.lastrowid
 
     def export_csv(self, path):
         if Path(path).resolve() in {
