@@ -1,4 +1,4 @@
-"""Aim-game recorder: click random dots in a 500x500 window; hits are saved, slow ones trimmed.
+"""Aim-game recorder: click random dots in a 350x350 window; hits are saved, slow ones trimmed.
 
 Run with `python aim_game.py`; Windows or macOS, Python 3.10+, no dependencies.
 Saves to its own database (data/aim.sqlite3), separate from the everyday recorder.
@@ -17,7 +17,7 @@ from tkinter import messagebox
 from capture import SUPPORTED, MouseCapture, configure_desktop, pixel_scale_at
 from storage import Database
 
-SIZE = 500
+SIZE = 350
 RADIUS = 15
 MAX_DURATION_NS = 200_000_000
 TRIM_WINDOW_NS = (150_000_000, 250_000_000)
@@ -159,12 +159,14 @@ class AimGame:
         self.canvas.pack()
         root.bind("<Configure>", self.moved)
         self.result = tk.StringVar(value=f"Click each dot; hits over {max_duration_ns // 1_000_000} ms are trimmed")
-        self.result_label = tk.Label(root, textvariable=self.result, font=FONT, anchor="w", padx=8)
+        self.result_label = tk.Label(root, textvariable=self.result, font=FONT, anchor="w", padx=8,
+                                     wraplength=SIZE - 24, justify="left")
         self.result_label.pack(fill="x")
         self.counts = tk.StringVar()
-        tk.Label(root, textvariable=self.counts, font=FONT, anchor="w", padx=8).pack(fill="x")
+        tk.Label(root, textvariable=self.counts, font=FONT, anchor="w", padx=8,
+                 wraplength=SIZE - 24, justify="left").pack(fill="x")
         tk.Label(root, text=f"Database: {path}", font=FONT, anchor="w", padx=8,
-                 fg="gray", wraplength=SIZE - 16, justify="left").pack(fill="x", pady=(0, 6))
+                 fg="gray", wraplength=SIZE - 24, justify="left").pack(fill="x", pady=(0, 6))
         self.total_segments = database.count_segments()
         self.update_counts()
         self.tick_id = root.after(10, self.tick)
